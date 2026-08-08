@@ -1,12 +1,16 @@
-# Operating systems
+node_modules/
+dist/
+build/
+.env
+.env.*
+!.env.example
+
+coverage/
+
+.vscode/
+.idea/
+
 .DS_Store
 Thumbs.db
 
-# Editors
-.idea/
-.vscode/
-
-# Local environment and logs
-.env
-.env.*
 *.log
