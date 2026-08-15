@@ -4,12 +4,20 @@ import { NestFactory } from "@nestjs/core";
 
 import { AppModule } from "./app.module";
 import { loadServerConfig } from "./config/server-config";
+import {
+  configureObservability,
+  createObservability,
+} from "./observability/observability";
 
 async function bootstrap(): Promise<void> {
   const config = loadServerConfig();
-  const app = await NestFactory.create(AppModule);
+  const observability = createObservability(config);
+  const app = await NestFactory.create(AppModule, {
+    logger: observability.logger,
+  });
 
   app.setGlobalPrefix("api");
+  configureObservability(app, observability);
 
   await app.listen(config.port);
 }
