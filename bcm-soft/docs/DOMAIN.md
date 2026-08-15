@@ -2,7 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-002 — Domain Definition  
-**Última actualización:** BCM-002B — Returns Scope Decision
+**Última actualización:** BCM-012A — Customer Business Decisions Reconciliation
 
 Este documento define cómo funciona el negocio de BCM SOFT. Traduce la definición funcional de `PRODUCT.md` a conceptos, relaciones, estados, transiciones, operaciones, invariantes y eventos de dominio, sin establecer decisiones técnicas o de implementación.
 
@@ -18,9 +18,9 @@ Cada **Organization / Business** es propietaria funcional de su información com
 
 ### 1.1. Límites funcionales de V1
 
-V1 abarca inventario de equipos y accesorios, ventas, clientes, proveedores básicos, reservas, plan canje, monedas y cotizaciones, catálogos, lista de precios, dashboard básico, usuarios y auditoría funcional.
+V1 abarca inventario individual y por cantidad, ventas, clientes, proveedores básicos, reservas, plan canje, gastos, monedas y cotizaciones, catálogos, lista de precios textual, dashboard prioritario, garantías básicas, usuarios y auditoría funcional. La capacidad de financiamiento es requerida, pero su profundidad V1 queda bloqueada por un Decision Gate conjunto con Payments.
 
-Compras avanzadas, devoluciones, garantías avanzadas, financiamiento avanzado, múltiples sucursales y otras capacidades excluidas o pendientes no adquieren reglas definitivas en este documento.
+Compras a proveedores, devoluciones, gestión avanzada de reclamos de garantía, plataforma crediticia avanzada, múltiples sucursales y otras capacidades excluidas o pendientes no adquieren reglas definitivas en este documento.
 
 ### 1.2. Convención terminológica
 
@@ -33,9 +33,10 @@ La convención solo normaliza el vocabulario del dominio. No prescribe nombres d
 | Concepto | Definición funcional |
 |---|---|
 | **Organization / Business (Negocio)** | Comercio que utiliza BCM SOFT y es propietario funcional de su inventario, operaciones, clientes, proveedores, configuraciones y usuarios. |
-| **User (Usuario)** | Persona que actúa en nombre de un negocio de acuerdo con permisos funcionales todavía sujetos a definición detallada. |
+| **User (Usuario)** | Persona que actúa en nombre de un negocio mediante una Membership, un role definido en código y permissions por operación. |
 | **Equipment (Equipo)** | Unidad física individual administrada por separado, aun cuando comparta modelo y características con otras unidades. |
-| **Accessory Product (Producto accesorio)** | Producto agregado cuya existencia se controla mediante cantidades, no mediante identidad individual por unidad. |
+| **Accessory Product / Quantity-Managed Product (Producto por cantidad)** | Producto agregado cuya existencia se controla mediante cantidades, no mediante identidad individual por unidad. En V1 la entidad existente de accesorios cubre también otros productos no individualizados. |
+| **Product Category (Categoría)** | Clasificación específica a la que pertenece exactamente un producto; un producto no puede pertenecer simultáneamente a varias categorías. |
 | **Inventory (Inventario)** | Conjunto de equipos y productos accesorios pertenecientes a un negocio, junto con su situación de disponibilidad. |
 | **Inventory Availability (Disponibilidad)** | Condición funcional que determina si un equipo o una cantidad de accesorios puede participar en una nueva operación. |
 | **Customer (Cliente)** | Persona vinculada con ventas, reservas, planes canje y futuras operaciones comerciales. |
@@ -46,12 +47,19 @@ La convención solo normaliza el vocabulario del dominio. No prescribe nombres d
 | **Currency (Moneda)** | Unidad monetaria en la que se expresa un valor. Las monedas iniciales son USD y ARS. |
 | **Exchange Rate (Cotización)** | Relación utilizada para interpretar o convertir valores entre ARS y USD en una operación concreta. |
 | **Reservation (Reserva)** | Asignación temporal de un equipo a un cliente, que impide tratarlo como disponible para otra operación mientras esté activa. |
-| **Deposit / Seña** | Monto asociado a una reserva. Sus efectos ante conversión, cancelación o vencimiento son `Decision Pending`. |
+| **Deposit / Seña** | Monto reembolsable asociado a una reserva. Su registro financiero al convertir, cancelar o vencer continúa como `Decision Pending`. |
 | **Trade-In (Plan canje)** | Parte de una venta mediante la cual el cliente entrega un equipo con un valor de toma que reduce el saldo a pagar. |
 | **Trade-In Equipment (Equipo recibido)** | Equipo entregado por el cliente en un plan canje, incorporado al inventario y relacionado con la venta de origen. |
 | **Price (Precio)** | Valor solicitado o acordado por la entrega de un producto. Se distingue entre precio de referencia y precio final. |
 | **Cost (Costo)** | Valor económico histórico asociado al ingreso o adquisición de un producto. |
-| **Profit (Rentabilidad)** | Resultado económico analizado principalmente en USD a partir del precio final y el costo histórico, sujeto a reglas pendientes para casos complejos. |
+| **Sales Revenue (Ingresos por ventas)** | Valor económico reconocido por las ventas válidas del período, antes de restar costo de mercadería y gastos. |
+| **Cost of Goods Sold / COGS (Costo de mercadería vendida)** | Costo histórico de los productos entregados en ventas válidas del período. |
+| **Gross Profit (Ganancia bruta)** | Sales Revenue menos COGS; no incluye gastos generales del negocio. |
+| **Expense (Gasto registrado)** | Egreso operativo registrado por el negocio, como servicio, mueble, inversión u otro gasto, con importe, fecha, categoría y trazabilidad. |
+| **Business Result (Resultado del negocio)** | Métrica interna igual a Gross Profit menos Expenses incluidos; no es ganancia neta contable. |
+| **Sale Correction (Corrección de venta)** | Operación versionada y auditada que modifica la interpretación vigente de una Sale confirmada sin reescribir ni borrar sus valores anteriores. |
+| **Customer Warranty (Garantía al cliente)** | Cobertura que el negocio ofrece al Customer por un producto vendido. |
+| **Supplier Warranty (Garantía de proveedor)** | Cobertura que un Supplier ofrece al negocio sobre un Equipment adquirido o recibido. |
 | **Catalog (Catálogo)** | Conjunto configurable de valores comerciales reutilizables, como marcas, modelos, capacidades o medios de pago. |
 | **Product Status (Estado de producto)** | Situación funcional actual de un equipo o producto accesorio que condiciona su uso comercial. |
 | **Inventory Movement (Movimiento de inventario)** | Explicación funcional de un cambio de cantidad, estado o disponibilidad del inventario. |
@@ -69,6 +77,8 @@ Cada negocio posee funcionalmente su propia información:
 - clientes;
 - proveedores;
 - reservas y señas;
+- gastos;
+- garantías;
 - configuraciones y catálogos;
 - usuarios;
 - movimientos de inventario;
@@ -91,24 +101,25 @@ La información de un negocio no forma parte funcionalmente de otro negocio. Una
 1. Todo concepto comercial debe pertenecer funcionalmente a un negocio.
 2. Una relación entre conceptos comerciales solo es válida cuando todos pertenecen al mismo negocio.
 3. El historial de un negocio debe permanecer independiente del historial de cualquier otro.
-4. Los roles, permisos detallados y mecanismos de aislamiento son `Decision Pending` para fases posteriores.
+4. El acceso se define mediante roles y permissions por operación; los mecanismos técnicos de aislamiento pertenecen a SECURITY y DATABASE.
 
 ### 3.4. User
 
 Un **User** es una persona que actúa en nombre de un negocio. Sus acciones comerciales siempre ocurren dentro del contexto funcional de ese negocio.
 
-Los tipos iniciales contemplados por producto son dueño, administrador, vendedor y usuario de consulta. Estos nombres expresan necesidades funcionales, pero todavía no constituyen una matriz aprobada de permisos.
+Los tipos iniciales son Owner, Admin, Seller y Viewer. Inicialmente existe un único User real Owner/Admin con acceso total, sin impedir múltiples Users futuros. Los roles son definidos en código y las permissions se asignan por operación/sección; no se crea un IAM dinámico.
 
 - Un usuario puede originar operaciones y acciones auditables.
 - Una acción sensible debe poder atribuirse al usuario que la realizó cuando corresponda.
 - Un usuario no adquiere acceso funcional a la información de otro negocio por el solo hecho de existir en BCM SOFT.
-- La posibilidad de que una persona participe en más de un negocio, sus roles y permisos detallados son `Decision Pending`.
+- Un Seller puede operar ventas y stock sin poder leer costos, ganancias o gastos salvo permission explícita.
+- La posibilidad de que una persona participe en más de un negocio permanece sujeta a Membership y contexto autorizado.
 
 ## 4. Equipment
 
 ### 4.1. Definición y responsabilidad
 
-Un **Equipment** representa una unidad física individual. Dos equipos del mismo modelo siguen siendo conceptos distintos si el negocio los administra individualmente. Cada unidad conserva su propia identidad, condición, costo, precio, estado, origen y trazabilidad.
+Un **Equipment** representa una unidad física individual. Todo producto individualizable se carga unidad por unidad. Dos equipos del mismo modelo siguen siendo conceptos distintos si el negocio los administra individualmente. Cada unidad conserva su propia identidad, condición, costo, precio, estado, origen y trazabilidad.
 
 Ejemplos: un iPhone específico, una MacBook específica o una tablet específica.
 
@@ -116,7 +127,7 @@ Ejemplos: un iPhone específico, una MacBook específica o una tablet específic
 
 | Categoría | Atributos | Significado |
 |---|---|---|
-| **Identificativos** | categoría, marca, modelo, capacidad, color, IMEI u otro identificador | Permiten reconocer y distinguir la unidad. El IMEI aplica solo cuando corresponde. |
+| **Identificativos** | una categoría específica, marca, modelo, capacidad, color, IMEI u otro identificador | Permiten reconocer y distinguir la unidad. Un iPhone exige IMEI individual; otros Equipment aplican la política de identificación configurada para su definición de producto. |
 | **Comerciales** | costo, precio de referencia, origen | Explican su valoración y procedencia comercial. |
 | **Variables** | salud de batería, condición funcional, condición estética, estado, observaciones, fotografías | Pueden cambiar durante la vida del equipo sin reemplazar su identidad. |
 | **Históricos** | costo de ingreso, cotización asociada cuando corresponda, origen, venta de salida, reserva y plan canje relacionados | Deben conservar el significado de operaciones pasadas aunque cambien valores actuales. |
@@ -137,6 +148,7 @@ El origen explica cómo ingresó el equipo al inventario, por ejemplo ingreso ma
 | **Reserved** | El equipo está asignado a una reserva activa y no debe ofrecerse a otra operación como disponible. |
 | **Sold** | El equipo forma parte de una venta confirmada y ya no está disponible para una venta normal. |
 | **Under Review** | El equipo está apartado de la comercialización mientras se revisa su condición o situación. |
+| **Written Off** | El equipo real fue dado de baja operacionalmente por robo o pérdida; permanece en la historia y no está disponible. |
 | **Archived** | El equipo se conserva como referencia histórica o queda fuera de la operación activa. Sus causas y posibles salidas son `Decision Pending`. |
 
 ### 5.2. Matriz de transiciones
@@ -148,13 +160,14 @@ Leyenda:
 - **Not allowed:** contradice una invariante vigente.
 - **Decision Pending:** no existe una regla suficiente para autorizarla.
 
-| Desde / hacia | Available | Reserved | Sold | Under Review | Archived |
-|---|---:|---:|---:|---:|---:|
-| **Available** | Sin cambio | Defined: crear reserva | Defined: confirmar venta | Defined: enviar a revisión | Decision Pending |
-| **Reserved** | Conditional: cancelar reserva cuando corresponda | Sin cambio | Conditional: convertir reserva en venta | Decision Pending | Decision Pending |
-| **Sold** | Conditional: cancelación o reversión válida cuando todos los elementos sean reversibles | Not allowed en operación normal | Sin cambio | Decision Pending | Decision Pending |
-| **Under Review** | Defined: finalizar revisión y habilitar | Decision Pending | Decision Pending | Sin cambio | Decision Pending |
-| **Archived** | Decision Pending | Decision Pending | Decision Pending | Decision Pending | Sin cambio |
+| Desde / hacia | Available | Reserved | Sold | Under Review | Written Off | Archived |
+|---|---:|---:|---:|---:|---:|---:|
+| **Available** | Sin cambio | Defined: crear reserva | Defined: confirmar venta | Defined: enviar a revisión | Defined: baja por robo/pérdida | Decision Pending |
+| **Reserved** | Conditional: cancelar reserva cuando corresponda | Sin cambio | Conditional: convertir reserva en venta | Decision Pending | Conditional: resolución autorizada de robo/pérdida | Decision Pending |
+| **Sold** | Conditional: cancelación o reversión válida cuando todos los elementos sean reversibles | Not allowed en operación normal | Sin cambio | Decision Pending | Not allowed como baja de inventario propio | Decision Pending |
+| **Under Review** | Defined: finalizar revisión y habilitar | Decision Pending | Decision Pending | Sin cambio | Defined: baja por robo/pérdida | Decision Pending |
+| **Written Off** | Decision Pending: recuperación física | Not allowed | Not allowed | Decision Pending | Sin cambio | Decision Pending |
+| **Archived** | Decision Pending | Decision Pending | Decision Pending | Decision Pending | Decision Pending | Sin cambio |
 
 ### 5.3. Transiciones y causas conocidas
 
@@ -164,6 +177,7 @@ Leyenda:
 - `Reserved → Sold`: conversión de la reserva en venta para el mismo Customer asociado.
 - `Available → Under Review`: decisión operativa de retirar temporalmente el equipo de la venta.
 - `Under Review → Available`: revisión finalizada con resultado apto para comercialización.
+- `Available/Under Review → Written Off`: baja operacional por robo o pérdida, con causa, User, fecha y movimiento. Si existe una reserva activa, primero debe resolverse su lifecycle de manera coherente.
 - `Sold → estado anterior correspondiente`: nunca ocurre como edición ordinaria; solo mediante cancelación o reversión válida cuando todos los elementos siguen siendo reversibles. El estado suele ser `Available`, salvo que una situación posterior lo impida.
 
 Toda transición no incluida como conocida requiere definición previa. No se asume que exista una transición solo porque ambos estados estén definidos.
@@ -180,12 +194,25 @@ Toda transición no incluida como conocida requiere definición previa. No se as
 8. Un cambio de estado no debe borrar la operación que originó el estado anterior cuando esa operación sea histórica.
 9. Cuando un equipo posea IMEI, ese IMEI debe ser único dentro del mismo negocio. No pueden existir dos equipos históricos diferentes con el mismo IMEI salvo una futura política explícita de corrección de datos.
 10. Un equipo recibido mediante plan canje debe conservar la relación con la venta que originó su ingreso.
+11. Un iPhone exige IMEI y registro individual antes de estar disponible o venderse.
+12. Todo Equipment pertenece a exactamente una categoría.
+13. Un Equipment `Written Off` no está disponible y conserva la evidencia de robo o pérdida.
+
+### 6.1. Eliminación física y baja operacional
+
+La eliminación física existe únicamente para corregir una carga errónea, prueba o simulación sin historia comercial. Requiere permission especial, motivo y Audit Event. Solo es válida cuando el Equipment:
+
+- nunca participó en Sale confirmada, Reservation, Trade-In, Warranty ni otra operación comercial;
+- no posee movimientos o dependencias críticas que deban conservarse;
+- puede retirarse junto con cualquier dato puramente efímero de creación sin dejar referencias huérfanas.
+
+La existencia de una relación histórica obliga a conservar el Equipment. Robo o pérdida siempre usa la baja operacional `Written Off` y un Inventory Movement; nunca physical delete. Una recuperación posterior requiere una transición explícita todavía pendiente, no editar el estado silenciosamente.
 
 ## 7. Accessory Product
 
 ### 7.1. Definición y responsabilidad
 
-Un **Accessory Product** representa un producto administrado por cantidad. Las unidades equivalentes no se individualizan como ocurre con Equipment.
+Un **Accessory Product** representa el modelo V1 de cualquier producto administrado por cantidad. Incluye accesorios y otros artículos cuyas unidades equivalentes no se individualizan como Equipment.
 
 Ejemplos: 20 fundas de una variante, 15 vidrios de un tipo o 8 cables de un modelo.
 
@@ -194,6 +221,7 @@ Ejemplos: 20 fundas de una variante, 15 vidrios de un tipo o 8 cables de un mode
 - **Identificación comercial:** categoría, nombre, marca, variante y SKU.
 - **Valores comerciales:** costo y precio de referencia.
 - **Disponibilidad:** estado y cantidad disponible.
+- **Reposición:** stock mínimo configurable por producto.
 - **Descripción:** datos adicionales, comentarios y fotografías.
 
 La unicidad y obligatoriedad del SKU son `Decision Pending`. El historial de costo y precio utilizado en cada venta pertenece a la operación, no depende de los valores actuales del producto.
@@ -229,6 +257,7 @@ Mientras no se defina stock reservado, la cantidad disponible es la referencia f
 6. Todo cambio relevante de cantidad debe tener una causa explicable mediante un movimiento de inventario.
 7. Un precio final cero es válido para un regalo, pero no evita el descuento de stock ni elimina el costo histórico.
 8. El comportamiento de un producto accesorio archivado o inactivo es `Decision Pending`.
+9. Cuando existe un stock mínimo configurado y `stock actual <= stock mínimo`, el producto genera condición de alerta.
 
 ### 8.3. Inventory Availability
 
@@ -236,7 +265,7 @@ La presencia de un producto en el inventario no implica necesariamente que esté
 
 - Un Equipment solo se considera disponible para una nueva operación cuando está `Available`.
 - Un Accessory Product requiere cantidad disponible mayor que cero y un estado que permita venderlo; los estados concretos están pendientes.
-- Un Equipment `Reserved`, `Sold`, `Under Review` o `Archived` no forma parte de la disponibilidad comercial normal.
+- Un Equipment `Reserved`, `Sold`, `Under Review`, `Written Off` o `Archived` no forma parte de la disponibilidad comercial normal.
 - La lista de precios solo puede mostrar productos disponibles para comercialización.
 - Los cambios de reserva, venta, revisión, ajuste y reversión deben reflejarse coherentemente en la disponibilidad.
 
@@ -254,7 +283,13 @@ Un **Customer** identifica a la persona vinculada con operaciones comerciales de
 - Qué datos del cliente deben conservarse exactamente como parte del contexto histórico de cada operación es `Decision Pending`.
 - La eliminación funcional, desactivación y posible anonimización de clientes requieren reglas posteriores.
 
-### 9.3. Relaciones
+### 9.3. Prevención de duplicados
+
+Al crear un Customer, el sistema compara criterios normalizados disponibles y advierte coincidencias probables. El nombre por sí solo nunca bloquea: puede producir advertencia y permitir que un usuario autorizado confirme que son personas distintas.
+
+El bloqueo solo se habilita cuando exista un identificador fuerte y una regla exacta confirmada, por ejemplo documento, email o teléfono normalizado dentro de la misma Organization. Como todavía no se eligió ese identificador, no existe una unicidad funcional obligatoria más allá del ID interno.
+
+### 9.4. Relaciones
 
 - Un cliente puede tener múltiples ventas.
 - Un cliente puede tener múltiples reservas a lo largo del tiempo, pero no dos reservas activas sobre el mismo equipo.
@@ -294,7 +329,7 @@ Puede incluir:
 - moneda y cotización cuando corresponda;
 - medio de pago;
 - observaciones;
-- uno o más componentes de plan canje, cuya multiplicidad exacta es `Decision Pending`.
+- cero, uno o múltiples componentes de plan canje.
 
 `PRODUCT.md` confirma que una venta puede contener uno o más equipos. Cualquier límite máximo o restricción de combinación permanece pendiente.
 
@@ -331,7 +366,7 @@ Una venta `Confirmed` o `Cancelled` no se elimina físicamente como comportamien
 
 V1 reconoce como medios iniciales efectivo, transferencia, tarjeta y otro. La venta conserva el medio, la moneda y la cotización utilizados cuando corresponda.
 
-Son `Decision Pending` los pagos combinados, pagos parciales, diferencias entre momento de pago y confirmación, referencias de pago, cuotas y financiamiento.
+La capacidad de venta financiada está confirmada: podrá expresar cantidad de cuotas, máximo permitido, intereses, recargos y condiciones. Su uso es ocasional y no convierte a BCM SOFT en una plataforma crediticia. La cardinalidad de pagos, reconciliación, estructura de cuotas y profundidad V1 permanecen en un Decision Gate conjunto antes de implementar Sales/Payments.
 
 ### 11.5. Historial económico
 
@@ -360,6 +395,7 @@ Confirmar una venta significa reconocerla como una operación comercial coherent
 - Los conceptos relacionados deben pertenecer al mismo negocio.
 - El Customer es opcional en una venta estándar, pero obligatorio cuando la operación incluye Reservation o Trade-In.
 - La regla sobre venta vacía continúa como `Decision Pending`.
+- Todo producto incluido debe existir como registro válido de inventario antes de confirmar.
 
 ### 12.2. Efectos inseparables
 
@@ -386,6 +422,12 @@ Una confirmación no es válida si solo ocurre una parte de estos efectos y el r
 
 Ante un error, la venta no debe quedar parcialmente confirmada.
 
+### 12.4. Quick Create / Quick Inventory Intake
+
+La UX de Sale puede abrir una creación/entrada rápida cuando falta un producto, sin obligar al usuario a abandonar el flujo. Esa acción reutiliza las validaciones normales de inventario y crea primero un Equipment individual o producto por cantidad válido. Solo después se incorpora a la Draft y la confirmación revalida disponibilidad/stock.
+
+Si la Sale se abandona, el producto creado sigue siendo un registro de inventario válido; no se crea una referencia temporal inexistente ni una línea huérfana. Un futuro lector POS/IMEI puede acelerar esta captura, pero está `Deferred` y no forma parte de V1 actual.
+
 ## 13. Venta de Equipment
 
 ### 13.1. Reglas definidas
@@ -404,7 +446,7 @@ La forma válida inicial es convertir la Reservation en Sale mediante `Reserved 
 
 Para vender el equipo a otra persona, primero debe cancelarse o liberarse explícitamente la reserva conforme a una operación válida. Solo después el equipo podrá venderse mediante una nueva venta.
 
-El tratamiento de la seña durante la conversión y el vencimiento de reservas permanecen como `Decision Pending`.
+La seña es reembolsable. Su aplicación financiera durante la conversión y la ejecución/evidencia de devolución permanecen como `Decision Pending`.
 
 ## 14. Venta de accesorios
 
@@ -515,17 +557,27 @@ Valor acordado para un ítem dentro de una venta. Puede diferir del precio de re
 4. Si un equipo puede venderse a precio cero es `Decision Pending`.
 5. Reglas de autorización para descuentos o precios personalizados son `Decision Pending`.
 
-## 18. Profit
+## 18. Economics and Profit Terminology
 
-La métrica principal de producto para BCM SOFT V1 es **Gross Profit USD**.
+BCM SOFT V1 utiliza términos comerciales internos explícitos en ARS y USD. Las métricas no constituyen contabilidad general.
 
-### 18.1. Definición base V1
+### 18.1. Definiciones base V1
 
-Conceptualmente:
+Conceptualmente, para operaciones válidas del período:
 
-`Gross Profit USD = ingresos económicos reconocidos de la venta en USD − costo histórico de los productos entregados en USD`
+```text
+Sales Revenue (Ingresos por ventas)
+− Cost of Goods Sold / COGS (Costo de mercadería vendida)
+= Gross Profit (Ganancia bruta)
 
-Gross Profit USD es margen bruto del producto. No representa flujo de caja, utilidad contable, impuestos, gastos operativos, comisiones ni costos financieros. Esas métricas quedan fuera de la definición base V1.
+Gross Profit
+− Expenses (Gastos registrados)
+= Business Result (Resultado del negocio)
+```
+
+Sales Revenue reconoce el valor económico de la venta, no solo el dinero cobrado. COGS usa los costos históricos de los productos entregados. Gross Profit es margen bruto comercial. Business Result resta los gastos registrados conforme al alcance V1.
+
+No se usa **Net Profit / Ganancia neta**: BCM SOFT V1 no incorpora impuestos, amortizaciones, intereses completos, devengamiento ni contabilidad general. Las presentaciones ARS/USD usan snapshots históricos; la convención de conversión, precisión y redondeo debe resolverse antes de implementar el Dashboard.
 
 ### 18.2. Equipment
 
@@ -551,15 +603,37 @@ Ejemplo: ante un precio acordado de USD 500, un Trade-In valuado en USD 100 y un
 
 El Equipment recibido ingresa con costo histórico inicial igual a su valor de toma. Su propia rentabilidad se reconoce cuando posteriormente se venda, evitando doble contabilización.
 
-### 18.5. Reglas históricas y pendientes
+### 18.5. Expense
+
+Un **Expense** registra un egreso del negocio con fecha efectiva, categoría, descripción, importe, moneda/cotización cuando corresponda, User y trazabilidad. Incluye como necesidades confirmadas muebles, inversiones, servicios y otros gastos.
+
+Un Expense contabilizado en un período no se elimina o sobrescribe para corregirlo: se anula o corrige mediante un hecho trazable. Para la línea base interna, los Expenses registrados se restan de Gross Profit para obtener Business Result y además se muestran por separado. La taxonomía definitiva de categorías y el tratamiento analítico detallado de inversiones requieren decisión previa.
+
+### 18.6. Dashboard baseline
+
+El Dashboard filtra por día, semana, mes y rango personalizado desde/hasta, según la zona horaria de la Organization. Como mínimo presenta:
+
+- Sales Revenue en ARS y USD;
+- Gross Profit en ARS y USD;
+- Expenses en ARS y USD;
+- Business Result en ARS y USD;
+- unidades de Equipment/productos individualizados vendidas;
+- unidades de productos por cantidad/accesorios vendidas;
+- productos más vendidos;
+- Gross Profit y margen por producto;
+- Gross Profit y margen totales.
+
+Las extensiones futuras deben ser acotadas y justificadas; “la mayor cantidad de información posible” no autoriza un backlog infinito ni infraestructura analítica prematura.
+
+### 18.7. Reglas históricas y pendientes
 
 - Los valores en ARS se interpretan con la cotización histórica de la operación para analizarlos en USD.
 - Descuentos y precios personalizados afectan el ingreso económico reconocido.
 - Cambiar costos, precios o cotizaciones actuales no modifica el Gross Profit USD histórico.
 - Redondeos, diferencias de cambio y precisión monetaria permanecen como `Decision Pending`.
-- Comisiones, impuestos, gastos operativos, costos financieros y otras métricas extendidas quedan fuera de la definición base V1.
+- Impuestos, amortizaciones, devengamientos, costos financieros completos y otras métricas contables quedan fuera de V1.
 - Rentabilidad ante devoluciones o cancelaciones se definirá junto con las políticas completas de esas capacidades.
-- Períodos, agrupaciones y momento de reconocimiento para el dashboard permanecen pendientes.
+- El detalle de atribución temporal de Sale Corrections y anulaciones sobre períodos ya cerrados permanece pendiente.
 
 ## 19. Reservation
 
@@ -571,6 +645,7 @@ Una **Reservation** es la asignación temporal de un equipo a un cliente. Mientr
 - Customer;
 - Deposit / seña;
 - fecha;
+- fecha/hora de vencimiento elegida para la reserva;
 - observaciones;
 - estado conceptual.
 
@@ -584,19 +659,18 @@ V1 adopta los siguientes estados funcionales:
 | **ConvertedToSale** | Finalizó mediante una venta relacionada con el mismo Customer. |
 | **Cancelled** | Finalizó por cancelación explícita sin convertirse en venta. |
 
-`Expired` queda como capacidad futura y `Decision Pending` hasta definir vencimiento automático y sus efectos.
+Al llegar `expiresAt`, el sistema presenta la reserva como vencida para consulta/alerta y recuerda gestionar la devolución de la seña. Esto no cambia por sí solo el estado persistido, no libera automáticamente Equipment y no ejecuta movimientos financieros. La transición operacional posterior y sus efectos permanecen pendientes.
 
 ### 19.3. Deposit / Seña
 
-La seña es un monto registrado con la reserva. No se define todavía como pago parcial definitivo, ingreso reconocido, importe reembolsable o penalidad.
+La seña es un monto **reembolsable** registrado con la reserva. Su reembolsabilidad está confirmada, pero todavía no se define como pago parcial definitivo ni se automatiza su devolución.
 
 Son `Decision Pending`:
 
 - moneda y cotización de la seña;
 - aplicación de la seña al convertir la reserva en venta;
-- devolución total o parcial;
-- pérdida de la seña;
-- tratamiento ante cancelación o vencimiento;
+- forma, momento y evidencia de la devolución;
+- tratamiento contable/operativo ante cancelación o vencimiento;
 - registro de señas adicionales;
 - modificación de su monto.
 
@@ -610,8 +684,10 @@ Son `Decision Pending`:
 6. Convertir una reserva en venta debe evitar que el equipo quede simultáneamente reservado y vendido.
 7. Una reserva ya convertida no puede cancelarse como si continuara activa.
 8. Una reserva finalizada no debe reactivarse sin una regla explícita; esa regla es `Decision Pending`.
-9. La extensión, modificación y expiración de reservas son `Decision Pending`.
-10. La política de señas es `Decision Pending` y no debe inferirse de la transición de estado.
+9. Cada reserva elige su duración; aproximadamente diez días es la práctica habitual, no un límite fijo universal.
+10. Alcanzar el vencimiento genera alerta y recordatorio de devolución, pero no acción financiera automática.
+11. La extensión y otras modificaciones de reservas son `Decision Pending`.
+12. La seña es reembolsable; su aplicación, devolución y evidencia financiera no se infieren de la transición de estado.
 
 ## 21. Trade-In
 
@@ -619,7 +695,7 @@ Un **Trade-In** es un componente de una venta mediante el cual el cliente entreg
 
 Todo Trade-In requiere un Customer identificado.
 
-`PRODUCT.md` confirma al menos un equipo recibido en una venta con plan canje. La posibilidad de múltiples equipos recibidos en la misma venta es `Decision Pending`.
+Una Sale puede relacionar cero, uno o múltiples Trade-Ins. Cada componente conserva su propio Equipment recibido y valor de toma; el total de valores de toma participa una sola vez en la reconciliación económica.
 
 ### 21.1. Responsabilidades
 
@@ -637,7 +713,7 @@ Cada equipo recibido debe:
 
 El ingreso del equipo recibido y la confirmación de la venta forman parte de una misma operación comercial. Un plan canje no debe reducir el saldo sin crear el equipo recibido, ni crear el equipo sin conservar la venta de origen.
 
-El estado inicial del equipo recibido y la necesidad de revisión previa a su disponibilidad son `Decision Pending`. Como alternativa de análisis, podría ingresar `Under Review` hasta validar su condición, pero esta propuesta no está aprobada.
+Cada Equipment recibido ingresa inicialmente `Available`. No pasa automáticamente por `Under Review`; una revisión posterior solo ocurre mediante la transición operacional normal y trazable.
 
 ## 22. Invariantes de Trade-In
 
@@ -653,32 +729,58 @@ El estado inicial del equipo recibido y la necesidad de revisión previa a su di
 10. Una resolución manual requiere intervención autorizada y no puede borrar ni alterar operaciones posteriores para forzar la reversión.
 11. Cuando todos los elementos son reversibles, la operación compensatoria puede restituir el Equipment entregado al cliente, revertir el ingreso del Trade-In Equipment y revertir los movimientos relacionados.
 12. Una misma reversión no puede retirar dos veces el equipo recibido ni duplicar restituciones.
+13. Una Sale puede contener múltiples Trade-Ins sin compartir ni sobrescribir sus identidades o valores de toma.
+
+## 22A. Warranty
+
+Customer Warranty y Supplier Warranty son agregados conceptualmente separados, aunque puedan referirse al mismo Equipment.
+
+### Supplier Warranty
+
+Cada Equipment puede conservar la fecha de compra/recepción, la duración/plazo informado por el proveedor y la fecha de vencimiento resultante. La vigencia se determina comparando ese vencimiento con la fecha consultada. Estos datos no crean por sí solos una compra a Supplier ni un claim.
+
+### Customer Warranty
+
+La garantía ofrecida al Customer nace de la relación comercial con una Sale/ítem. Debe conservar cobertura y vigencia históricas separadas de cualquier garantía del Supplier. Duraciones predeterminadas, cobertura, estados y lifecycle de reclamos continúan `Pending` antes de implementar.
+
+Una garantía nunca cambia automáticamente el estado o stock de Equipment; todo efecto de inventario requiere una operación explícita. La capacidad avanzada de claims/reparaciones permanece fuera del alcance definido.
 
 ## 23. Modificación de ventas
 
-Una venta `Draft` puede editarse libremente porque todavía no produjo efectos comerciales definitivos. Una venta `Confirmed` no puede editarse libremente como si fuera un formulario común.
+Una venta `Draft` puede editarse libremente porque todavía no produjo efectos comerciales definitivos. La UX ofrece **Editar venta** sobre una Sale `Confirmed`, pero esa intención se ejecuta como **Sale Correction**, no como mutación destructiva del documento original.
 
 ### 23.1. Categorías de modificación
 
 | Categoría | Ejemplos | Riesgo funcional |
 |---|---|---|
-| **Datos no operativos** | observaciones internas y notas administrativas que no alteran dinero, stock, Customer contractual o productos | Pueden modificarse con auditoría. |
+| **Datos no operativos** | observaciones internas y notas administrativas que no alteran dinero, stock, Customer contractual o productos | Pueden corregirse con auditoría. |
 | **Datos económicos** | precio final, descuento, moneda, cotización, medio de pago e importe | No pueden modificarse silenciosamente; requieren corrección, reversión o nueva operación explícita según corresponda. |
 | **Datos que afectan inventario** | cambiar Equipment, cambiar cantidades, agregar o quitar productos, cambiar Trade-In | No pueden editarse directamente; requieren una operación explícita, trazable y consistente. |
 
-### 23.2. Regla oficial
+### 23.2. Alternativas evaluadas
 
-- Los datos no operativos pueden corregirse manteniendo auditoría.
-- Las correcciones económicas no reescriben silenciosamente valores históricos.
-- Los cambios que afectan inventario no se aplican directamente sobre una venta `Confirmed`.
-- Toda corrección operativa o económica utiliza un mecanismo explícito que preserve la venta original y su trazabilidad.
-- Los permisos especiales y el mecanismo concreto para cada tipo de corrección permanecen pendientes.
+| Opción | UX | Historia, snapshots y audit | Stock | Complejidad / decisión |
+|---|---|---|---|---|
+| **A. Destructive edit of Confirmed Sale** | Directa, pero oculta que ocurrió una corrección | Pierde o vuelve ambiguos valores anteriores, actor, fecha, motivo y costos | Puede desalinear movimientos y operaciones posteriores | Rechazada: contradice invariantes Critical. |
+| **B. Correction/versioning behind “Edit Sale”** | Mantiene la acción esperada y presenta el resultado vigente | Preserva original, before/after, versión/corrección, User, fecha, motivo y snapshots | Aplica solo deltas compensatorios válidos y conserva movimientos anteriores | **Adoptada**: mayor integridad con complejidad acotada. |
+| **C. Cancel + recreate automatically** | Puede parecer edición, pero crea una nueva Sale/número y relaciones | Conserva historia si ambas operaciones son visibles | Solo funciona cuando toda la venta es reversible; falla con dependencias | Alternativa excepcional para reemplazo total reversible, no mecanismo general. |
+
+### 23.3. Regla oficial de Sale Correction
+
+- La Sale original y sus snapshots confirmados permanecen inmutables.
+- Cada corrección conserva before/after, User, fecha, motivo obligatorio para cambios económicos/inventario y relación con la Sale/versión anterior.
+- La vista vigente se obtiene de la versión confirmada más las correcciones aplicadas; la historia completa sigue consultable.
+- Los cambios de stock generan movimientos delta/compensatorios atómicos, idempotentes y basados en costos históricos; nunca se editan movements anteriores.
+- No existe límite temporal funcional, pero toda corrección revalida permisos, tenant, disponibilidad, dependencias y consistencia económica en el momento de aplicarse.
+- Cuando un producto fue revendido, reservado o participa en una dependencia que impide compensar coherentemente, la corrección automática se bloquea como `Manual Resolution Required`.
+- La atribución de una corrección a períodos del Dashboard y la matriz exacta de cambios permitidos con dependencias permanecen pendientes antes de implementar.
 
 ## 24. Cancelación y reversión
 
 ### 24.1. Distinciones conceptuales
 
-- **Eliminar:** hacer que un concepto deje de formar parte de la información activa o histórica. Solo una venta `Draft` sin efectos comerciales puede eliminarse normalmente; una venta `Confirmed` o `Cancelled` no se elimina físicamente como comportamiento normal.
+- **Physical Delete:** el registro desaparece. Solo una Sale `Draft` sin efectos comerciales puede eliminarse normalmente; una Sale `Confirmed` o `Cancelled` nunca se elimina físicamente mediante una capacidad de usuario.
+- **Business Delete / Void:** el usuario la percibe como eliminada/anulada, pero la Sale, motivo, actor, fecha y efectos compensatorios permanecen.
 - **Cancelar:** declarar que una operación ya no debe continuar produciendo sus efectos hacia adelante, conservando que existió y por qué fue cancelada.
 - **Revertir:** aplicar efectos compensatorios para restaurar coherencia sobre inventario y valores sin borrar la operación original.
 
@@ -696,6 +798,8 @@ Una venta `Confirmed` solo puede cancelarse mediante una operación explícita. 
 - generar los efectos compensatorios necesarios cuando sea posible.
 
 Una venta ya `Cancelled` no puede cancelarse nuevamente como una cancelación normal.
+
+La UI puede rotular la acción **Eliminar**, siempre que explique el efecto y el backend la trate como cancelación/void/reversal o corrección administrativa. Un physical delete de Sale confirmada solo podría ocurrir por recuperación técnica excepcional, fuera del flujo de producto, con procedimiento autorizado y evidencia; no es una permission comercial.
 
 ### 24.3. Reversibilidad
 
@@ -949,7 +1053,7 @@ La cotización de referencia es una configuración comercial, pero cada operaci�
 
 **Errores posibles**
 
-- equipo `Sold`, `Reserved`, `Under Review` o `Archived`;
+- equipo `Sold`, `Reserved`, `Under Review`, `Written Off` o `Archived`;
 - disponibilidad modificada por otra operación;
 - cotización requerida ausente o inválida;
 - precio inválido según reglas pendientes.
@@ -994,21 +1098,21 @@ La cotización de referencia es una configuración comercial, pero cada operaci�
 
 - La venta cumple sus precondiciones ordinarias.
 - Existe un Customer identificado que entrega al menos un equipo identificable.
-- Se acuerda un valor de toma válido.
-- El equipo recibido no está ya registrado como el mismo ingreso.
+- Se acuerda un valor de toma válido por cada Trade-In.
+- Ningún equipo recibido está ya registrado como el mismo ingreso.
 
 **Acción**
 
 1. Se registran los productos vendidos.
-2. Se registran los datos del equipo recibido y su valor de toma.
-3. El valor reduce el saldo a pagar.
-4. Se confirma la venta junto con el ingreso del equipo.
+2. Se registran los datos de uno o múltiples equipos recibidos y el valor de toma de cada uno.
+3. La suma de valores reduce el saldo a pagar.
+4. Se confirma la venta junto con todos los ingresos.
 
 **Efectos**
 
 - Se producen las salidas de inventario de la venta.
-- El equipo recibido ingresa con el valor de toma como costo inicial.
-- La venta y el equipo recibido quedan relacionados.
+- Cada equipo recibido ingresa `Available` con su valor de toma como costo inicial.
+- La venta y todos los equipos recibidos quedan relacionados.
 
 **Postcondiciones**
 
@@ -1035,7 +1139,7 @@ La cotización de referencia es una configuración comercial, pero cada operaci�
 **Acción**
 
 1. Se seleccionan equipo y cliente.
-2. Se registran fecha, seña y observaciones.
+2. Se registran fecha, vencimiento elegido, seña reembolsable y observaciones.
 3. Se activa la reserva.
 
 **Efectos**
@@ -1226,6 +1330,16 @@ Estas reglas no deben romperse en ningún flujo válido:
 28. Desactivar un cliente, proveedor o catálogo no rompe relaciones históricas existentes.
 29. Una Sale Cancellation y un Return representan eventos comerciales distintos.
 30. BCM SOFT V1 no permite representar un Return mediante la modificación destructiva de una Sale `Confirmed`.
+31. Cada producto pertenece a exactamente una categoría específica.
+32. Un iPhone se registra individualmente con IMEI obligatorio antes de una operación comercial.
+33. Un Equipment con historia comercial no se elimina físicamente; robo/pérdida produce `Written Off` y movement.
+34. Una Sale Correction conserva la Sale original, versiones anteriores, actor, fecha, motivo y movimientos/snapshots afectados.
+35. Una Sale puede contener múltiples Trade-Ins, cada uno con identidad y valor propios.
+36. Un Equipment recibido por Trade-In ingresa `Available`.
+37. Un stock mínimo configurado produce alerta cuando `current stock <= minimum stock`.
+38. Customer Warranty y Supplier Warranty no se sustituyen ni se confunden.
+39. Business Result no se denomina Net Profit y se calcula como Gross Profit menos Expenses registrados dentro del alcance V1.
+40. El nombre de Customer por sí solo no habilita un bloqueo de duplicado.
 
 Ante un conflicto de objetivos, el dominio prioriza en este orden: **consistencia**, **trazabilidad**, **corrección económica** y, finalmente, **comodidad operativa**.
 
@@ -1238,15 +1352,21 @@ Los siguientes nombres representan hechos relevantes que ocurrieron en el negoci
 | **EquipmentAdded** | Una nueva unidad fue reconocida en el inventario. | Establece origen, costo inicial, estado y disponibilidad. |
 | **EquipmentSentToReview** | Un equipo disponible fue apartado para revisión. | Cambia de `Available` a `Under Review`. |
 | **EquipmentReviewCompleted** | Finalizó la revisión de un equipo. | Puede habilitar `Under Review → Available`; otros resultados son pendientes. |
+| **EquipmentWrittenOff** | Un Equipment real fue dado de baja por robo o pérdida. | Cambia a `Written Off`, conserva causa/actor/fecha y sale de disponibilidad. |
+| **EquipmentDeletedAsError** | Se eliminó una carga errónea sin historia comercial. | Conserva Audit Event de la acción; no se usa para una baja real. |
 | **EquipmentReserved** | Se activó una reserva sobre un equipo. | Relaciona equipo y cliente; cambia a `Reserved`. |
 | **ReservationCancelled** | Una reserva activa fue cancelada. | Finaliza la reserva y libera el equipo cuando corresponde. |
 | **ReservationConvertedToSale** | Una reserva originó una venta confirmada. | Relaciona ambas operaciones y cambia el equipo a `Sold`. |
 | **SaleConfirmed** | Una venta fue confirmada coherentemente. | Produce salidas, ingresos de Trade-In y valores históricos. |
 | **SaleCancelled** | Una venta confirmada fue cancelada explícitamente. | Conserva la venta, registra motivo, User y fecha, y se relaciona con sus efectos compensatorios. |
 | **SaleReversed** | Se aplicaron efectos compensatorios sobre una venta reversible. | Restituye coherencia sin borrar la operación original ni duplicar efectos. |
+| **SaleCorrected** | Se aplicó una corrección versionada a una Sale confirmada. | Conserva before/after y produce deltas económicos/de inventario autorizados. |
 | **AccessoryStockChanged** | Cambió la cantidad de un producto accesorio. | Conserva causa, cantidad y relación con la operación de origen. |
 | **InventoryAdjusted** | Un usuario realizó un ajuste manual explícito. | Conserva motivo, User responsable, fecha y cambio producido. |
 | **TradeInReceived** | Un equipo fue recibido como parte de pago. | Ingresa al inventario con valor de toma y relación con la venta. |
+| **ReservationExpiredAlertRaised** | Una reserva alcanzó su vencimiento elegido. | Avisa y recuerda gestionar la seña; no mueve dinero ni libera stock automáticamente. |
+| **ExpenseRecorded** | Se reconoció un gasto interno. | Aporta al total de Expenses y Business Result del período. |
+| **ExpenseVoided** | Se anuló trazablemente un gasto. | Conserva el original y ajusta el resultado sin physical delete. |
 | **CatalogValueChanged** | Cambió o se desactivó un valor configurable. | Afecta uso futuro sin reescribir historia. |
 | **ExchangeRateChanged** | Cambió la cotización general de referencia. | Afecta operaciones futuras; no modifica cotizaciones históricas. |
 
@@ -1256,25 +1376,25 @@ Los eventos de devolución continúan como conceptos de una capacidad futura. To
 
 | ID | Tema | Estado | Decisión o pregunta vigente | Prioridad | Fase sugerida |
 |---|---|---|---|---|---|
-| `DOM-DEC-001` | Modificación de venta | `Resolved` | `Draft` se edita libremente. En `Confirmed`, solo datos no operativos se corrigen con auditoría; cambios económicos o de inventario requieren operación explícita. | Critical | BCM-002A |
+| `DOM-DEC-001` | Modificación de venta | `Superseded` | La regla histórica rechazó edición destructiva y exigió operación explícita; BCM-012A la reemplaza por Sale Correction versionada en `DOM-DEC-056`. | Critical | BCM-002A / BCM-012A |
 | `DOM-DEC-002` | Cancelación de venta | `Resolved` | `Confirmed → Cancelled` mediante cancelación explícita, trazable e idempotente; conserva original y aplica efectos compensatorios cuando es reversible. | Critical | BCM-002A |
 | `DOM-DEC-003` | Devoluciones y cambios conceptuales | `Resolved` | Son operaciones posteriores vinculadas a la venta original, nunca una edición o eliminación de la venta. La capacidad completa queda fuera de V1. | Critical | BCM-002A |
 | `DOM-DEC-004` | Reversión de Trade-In | `Resolved` | Solo es automática si todos los elementos siguen siendo reversibles; de lo contrario queda `Manual Resolution Required` sin alterar operaciones posteriores. | Critical | BCM-002A |
 | `DOM-DEC-005` | Venta de reservado | `Resolved` | Solo mediante `Reservation → ConvertedToSale` al mismo Customer. Para otro comprador se requiere cancelación o liberación previa válida. | High | BCM-002A |
-| `DOM-DEC-006` | Señas | `Pending` | ¿Cómo se aplican, devuelven o pierden las señas y qué reglas dependen de quién cancela? | High | Seguimiento de producto/dominio |
-| `DOM-DEC-007` | Vencimiento de reservas | `Pending` | ¿Las reservas vencen, cuándo y con qué efecto sobre Equipment y seña? | High | Seguimiento de producto/dominio |
+| `DOM-DEC-006` | Señas | `Confirmed` | La seña es reembolsable. Aplicación a Sale, ejecución/evidencia de devolución y efectos según cancelación/vencimiento siguen en `DOM-DEC-058`. | High | BCM-012A |
+| `DOM-DEC-007` | Vencimiento de reservas | `Confirmed` | Cada Reservation elige su vencimiento; ~10 días es habitual. Al vencer genera alerta/recordatorio, sin liberar Equipment ni mover dinero automáticamente. | High | BCM-012A |
 | `DOM-DEC-008` | Stock reservado de accesorios | `Pending` | ¿V1 necesita apartar cantidades de accesorios antes de una venta? | Medium | Roadmap funcional posterior |
 | `DOM-DEC-009` | Venta sin cliente | `Resolved` | Customer es opcional en venta estándar y obligatorio para Reservation y Trade-In. | High | BCM-002A |
 | `DOM-DEC-010` | Ciclo de Sale | `Resolved` | Se adoptan `Draft`, `Confirmed` y `Cancelled`; solo Draft sin efectos puede eliminarse normalmente. | High | BCM-002A |
 | `DOM-DEC-011` | Múltiples equipos vendidos | `Pending` | Aunque se permite uno o más, ¿existen límites o restricciones de combinación por venta? | Low | Roadmap funcional posterior |
-| `DOM-DEC-012` | Múltiples Trade-Ins | `Pending` | ¿Una venta puede recibir más de un equipo y cómo se distribuyen sus valores de toma? | High | Seguimiento de producto/dominio |
+| `DOM-DEC-012` | Múltiples Trade-Ins | `Confirmed` | Una Sale admite uno o múltiples Trade-Ins; cada uno conserva Equipment y valor propios y el total se reconcilia sin doble conteo. | High | BCM-012A |
 | `DOM-DEC-013` | Rentabilidad base V1 | `Resolved` | Se adopta Gross Profit USD: ingresos reconocidos en USD menos costo histórico de productos entregados en USD, sin doble contabilizar Trade-In. | Critical | BCM-002A |
 | `DOM-DEC-014` | Redondeos y precisión | `Pending` | ¿Qué precisión y redondeo se aplican a importes, cotizaciones y rentabilidad? | High | Antes de BCM-004 |
 | `DOM-DEC-015` | Cotización histórica | `Resolved` | Cada operación conserva la cotización usada; la cotización general es solo un valor predeterminado para operaciones nuevas. | High | BCM-002A |
 | `DOM-DEC-016` | Sucursales | `Pending` | ¿Existirán sucursales y cómo funcionarán propiedad, disponibilidad y transferencias de stock? | High | Roadmap funcional futuro |
 | `DOM-DEC-017` | Compras | `Pending` | ¿Cómo se registran compras a proveedores, ingresos, costos, monedas y devoluciones? | High | Roadmap funcional futuro |
-| `DOM-DEC-018` | Garantías | `Pending` | ¿Qué alcance, plazos, estados y efectos de inventario tendrán las garantías? | Medium | Roadmap funcional futuro |
-| `DOM-DEC-019` | Financiamiento | `Pending` | ¿Qué modalidades de financiación y relación con clientes y pagos se admitirán? | Medium | Roadmap funcional futuro |
+| `DOM-DEC-018` | Garantías | `Confirmed` | Customer Warranty y Supplier Warranty son distintas; Equipment registra vigencia de Supplier Warranty. Defaults, cobertura y claims quedan en `DOM-DEC-064`. | High | BCM-012A |
+| `DOM-DEC-019` | Financiamiento | `Confirmed` | Se requiere financiación ocasional con cuotas, máximo, intereses, recargos y condiciones, sin plataforma crediticia compleja. Profundidad V1 queda en `DOM-DEC-063`. | High | BCM-012A |
 | `DOM-DEC-020` | Caja | `Pending` | ¿Cómo se registran ingresos, egresos, cierres y diferencias por medio de pago? | High | Roadmap funcional futuro |
 | `DOM-DEC-021` | Unicidad de IMEI | `Resolved` | Cuando existe, el IMEI es único dentro del mismo negocio; excepciones requieren una futura política explícita de corrección. | High | BCM-002A |
 | `DOM-DEC-022` | Archived | `Pending` | ¿Qué causas permiten archivar Equipment o accesorios y qué transiciones de recuperación existen? | Medium | Seguimiento de dominio |
@@ -1286,17 +1406,17 @@ Los eventos de devolución continúan como conceptos de una capacidad futura. To
 | `DOM-DEC-028` | Impuestos | `Pending` | ¿Qué impuestos afectan precios, ventas, comprobantes y métricas futuras? | High | Roadmap funcional futuro |
 | `DOM-DEC-029` | Comprobantes | `Pending` | ¿Qué comprobantes comerciales se requieren y cuándo se emiten? | Medium | Roadmap funcional futuro |
 | `DOM-DEC-030` | Descuentos y promociones | `Pending` | ¿Qué tipos existen, dónde se aplican y quién puede autorizarlos? | Medium | Seguimiento de producto/dominio |
-| `DOM-DEC-031` | Bajo stock | `Pending` | ¿Cómo se define el umbral de bajo stock por accesorio? | Low | Seguimiento de producto |
-| `DOM-DEC-032` | Dashboard | `Pending` | ¿Qué períodos y criterios exactos usan facturación, Gross Profit USD y operaciones recientes? | Medium | Antes de implementar dashboard |
+| `DOM-DEC-031` | Bajo stock | `Confirmed` | Cada producto por cantidad puede configurar mínimo; existe alerta cuando stock actual es igual o inferior al mínimo. | Medium | BCM-012A |
+| `DOM-DEC-032` | Dashboard | `Confirmed` | Prioridad alta V1; filtros día/semana/mes/rango y baseline de Revenue, Gross Profit, Expenses, Business Result, cantidades, best sellers y margen por producto/total en ARS/USD. | High | BCM-012A |
 | `DOM-DEC-033` | Auditoría | `Pending` | Además de cancelaciones y ajustes, ¿qué acciones, datos, motivos y plazos de conservación son obligatorios? | High | BCM-005 y estándares posteriores |
-| `DOM-DEC-034` | Usuarios y permisos | `Pending` | ¿Qué puede consultar o modificar cada tipo de usuario y qué operaciones requieren autorización especial? | High | BCM-005 |
+| `DOM-DEC-034` | Usuarios y permisos | `Confirmed` | Un Owner/Admin real inicia con acceso total; el RBAC code-defined soporta múltiples Users. Seller puede operar ventas/stock sin costos, profit o gastos salvo permission explícita. | High | BCM-012A / BCM-005 |
 | `DOM-DEC-035` | Independencia de negocios | `Pending` | ¿Qué reglas funcionales adicionales rigen usuarios que accedan a más de un negocio? | High | BCM-005 |
-| `DOM-DEC-036` | Lista de precios | `Pending` | ¿Qué formatos, campos y reglas de precios personalizados se necesitan al exportar o compartir? | Low | Seguimiento de producto |
+| `DOM-DEC-036` | Lista de precios | `Confirmed` | Prioridad V1: texto ordenado listo para copiar/WhatsApp. PDF/imagen e integración directa quedan `Deferred`. | Low | BCM-012A |
 | `DOM-DEC-037` | Estados de Equipment | `Pending` | ¿Qué transiciones involucran `Archived` y cuáles son los resultados posibles de `Under Review`? | High | Antes de BCM-003 |
 | `DOM-DEC-038` | Modificar reservas | `Pending` | ¿Pueden extenderse, cambiar de Customer, cambiar de Equipment o modificar la seña? | Medium | Seguimiento de producto/dominio |
 | `DOM-DEC-039` | Ajustes de inventario | `Pending` | Además de motivo, User y fecha obligatorios, ¿qué permisos y evidencia se requieren? | High | Seguimiento de dominio y seguridad |
-| `DOM-DEC-040` | Ingreso manual | `Pending` | ¿Qué datos, origen, costo y estado inicial son obligatorios al crear Equipment o accesorios? | High | Antes de BCM-004 |
-| `DOM-DEC-041` | Trade-In recibido | `Pending` | ¿El Equipment recibido ingresa `Under Review` o `Available`, y quién valida su condición? | High | Antes de BCM-003 |
+| `DOM-DEC-040` | Ingreso manual | `Pending` | Está confirmado unitario para Equipment, cuantitativo cuando corresponda e IMEI obligatorio para iPhone. Falta cerrar campos/costo/origen y ubicación configurable de la policy de identificación. | High | Antes de catálogo/inventario |
+| `DOM-DEC-041` | Trade-In recibido | `Confirmed` | El Equipment recibido ingresa directamente `Available`; una revisión posterior es una transición operacional separada. | High | BCM-012A |
 | `DOM-DEC-042` | Saldo negativo por Trade-In | `Pending` | ¿Qué ocurre cuando el valor de toma supera el total de la venta? | High | Seguimiento de producto/dominio |
 | `DOM-DEC-043` | Venta vacía | `Pending` | ¿Debe rechazarse siempre una venta sin productos o existen operaciones económicas sin entrega? | High | Antes de BCM-003 |
 | `DOM-DEC-044` | Datos históricos del cliente | `Pending` | ¿Qué identidad y contacto deben conservarse tal como estaban al confirmar una operación? | Medium | Seguimiento de dominio y seguridad |
@@ -1307,12 +1427,32 @@ Los eventos de devolución continúan como conceptos de una capacidad futura. To
 | `DOM-DEC-049` | Costos de Trade-In | `Pending` | ¿Cómo afectan reparación, reacondicionamiento y otros costos posteriores al costo del Equipment recibido? | High | Seguimiento de producto/dominio |
 | `DOM-DEC-050` | Costo de Equipment | `Resolved` | V1 utiliza Specific Historical Cost por unidad; no se promedian equipos aunque sean del mismo modelo. | Critical | BCM-002A |
 | `DOM-DEC-051` | Configuración de cotización | `Pending` | ¿Qué convención, tipo de dólar, fuente y permisos de actualización usa la cotización sugerida? | High | Seguimiento de producto/dominio |
-| `DOM-DEC-052` | Métricas extendidas de rentabilidad | `Pending` | ¿Cuándo se incorporan comisiones, impuestos, gastos operativos, costos financieros y otras métricas distintas de Gross Profit USD? | Medium | Roadmap funcional futuro |
+| `DOM-DEC-052` | Métricas extendidas de rentabilidad | `Superseded` | La pregunta amplia fue reemplazada por el baseline V1 de Expenses/Business Result en `DOM-DEC-065`; contabilidad completa continúa fuera de alcance. | Medium | BCM-012A |
 | `DOM-DEC-053` | Reserva tras cancelar venta | `Pending` | Si una venta originada en Reservation se cancela, ¿se restaura la reserva, se crea otra o queda convertida históricamente? | High | Seguimiento de producto/dominio |
 | `DOM-DEC-054` | Resolución manual | `Pending` | ¿Quién puede resolver una operación no reversible, qué acciones compensatorias se permiten y qué evidencia debe registrarse? | High | Seguimiento de dominio y seguridad |
 | `DOM-DEC-055` | Diseño futuro de Return | `Pending — Future Capability` | ¿Qué estados, plazos, condiciones, reintegros, movimientos de inventario y reglas económicas tendrá Return antes de su futura implementación? | High | Roadmap funcional futuro |
+| `DOM-DEC-056` | Sale Correction | `Confirmed` | La UX “Editar venta” crea una corrección/versionado; original y versiones previas permanecen, con actor/fecha/motivo/snapshots y movimientos delta. Dependencias no reversibles bloquean automatización. | Critical | BCM-012A |
+| `DOM-DEC-057` | Eliminar Sale confirmada | `Confirmed` | La UX puede decir “Eliminar”, pero ejecuta business void/cancel/reversal. Physical delete no es capacidad comercial y solo existe como recuperación técnica excepcional. | Critical | BCM-012A |
+| `DOM-DEC-058` | Ejecución de seña y vencimiento | `Pending` | ¿Cómo se registra/aplica/devuelve la seña y qué transición libera Equipment después de vencer, sin automatizar dinero por defecto? | High | Antes de Reservation afectada |
+| `DOM-DEC-059` | Baja/eliminación de Equipment | `Confirmed` | Physical delete solo para error/prueba sin historia ni dependencia crítica; robo/pérdida usa `Written Off`, movement, motivo, actor y fecha. | Critical | BCM-012A |
+| `DOM-DEC-060` | Categoría y tracking | `Confirmed` | Un producto tiene una categoría; Equipment se individualiza; iPhone exige IMEI; otros productos pueden administrarse por cantidad. POS/scanner queda `Deferred`. | High | BCM-012A |
+| `DOM-DEC-061` | Quick inventory during Sale | `Confirmed` | La Sale permite crear/ingresar producto mediante el flujo válido de inventario antes de anexarlo/confirmar; nunca referencia una entidad inexistente. | High | BCM-012A |
+| `DOM-DEC-062` | Customer duplicate | `Pending` | Se advierten coincidencias probables; nombre solo no bloquea. Falta elegir identificador fuerte exacto para bloqueo tenant-aware. | High | Antes de Customer persistence |
+| `DOM-DEC-063` | Financing V1 depth | `Pending` | ¿V1 registra solo plan/cuotas/surcharge en Sale o también cronograma, vencimientos, cobros parciales y estados? | Critical | Antes de Payment/Sale schema |
+| `DOM-DEC-064` | Warranty defaults/lifecycle | `Pending` | ¿Qué duraciones/defaults, cobertura y estados se aplican a Customer/Supplier Warranty y qué reclamos entran en V1? | High | Antes de Warranty persistence |
+| `DOM-DEC-065` | Expenses y economía V1 | `Confirmed` | Revenue − COGS = Gross Profit; Gross Profit − Expenses = Business Result. No se usa Net Profit. Expenses forman parte de V1 y del Dashboard. | Critical | BCM-012A |
+| `DOM-DEC-066` | Expense categories | `Pending` | ¿Cuál es la taxonomía inicial y cómo se presenta el tratamiento interno de muebles/inversiones frente a servicios y otros gastos? | High | Antes de Expense persistence |
 
-Las decisiones `Resolved` son reglas oficiales del dominio. Las decisiones `Pending` no autorizan comportamientos y deben resolverse en la fase indicada antes de implementar la capacidad afectada.
+Las decisiones `Resolved` y `Confirmed` son reglas oficiales. `Superseded` conserva historia y remite a la decisión vigente. `Deferred` identifica alcance futuro no autorizado. Las decisiones `Pending` no autorizan comportamientos y deben resolverse en la fase indicada antes de implementar la capacidad afectada.
+
+### Preguntas de negocio todavía abiertas
+
+1. ¿Suppliers se vincularán a un futuro flujo de Purchasing y con qué alcance?
+2. ¿Qué identificador fuerte exacto bloquea un Customer duplicado: documento, email, teléfono o combinación?
+3. ¿Qué correcciones se permiten cuando Equipment/Trade-In/stock ya participa en operaciones posteriores y quién ejecuta `Manual Resolution Required`?
+4. ¿Qué profundidad de Financing entra en V1: solo condiciones/cuotas acordadas o también cronograma, vencimientos y cobros?
+5. ¿Qué duraciones/defaults y cobertura aplican a Customer Warranty y Supplier Warranty?
+6. ¿Cuáles son las categorías iniciales de Expense y cómo debe presentarse una inversión/mueble?
 
 ## 34. No diseñar todavía
 

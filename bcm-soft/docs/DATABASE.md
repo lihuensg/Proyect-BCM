@@ -2,7 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-004 — PostgreSQL Database Design  
-**Última revisión:** BCM-005A — Security Database Addendum
+**Última revisión:** BCM-012A — Customer Business Decisions Reconciliation
 
 Este documento define el modelo relacional, constraints, transacciones, concurrencia, multi-tenancy, índices y ciclo de datos de BCM SOFT. No contiene SQL ejecutable, `schema.prisma`, migrations ni código.
 
@@ -19,7 +19,12 @@ Este documento define el modelo relacional, constraints, transacciones, concurre
 | Tenant ownership | `organization_id` explícito y FKs compuestas tenant-aware |
 | Equipment status | `text` + CHECK no configurable |
 | Accessory stock | estado materializado + ledger especializado, actualizados atómicamente |
+| Product category | exactamente una FK tenant-aware por producto; no tabla many-to-many |
+| Minimum stock | umbral nullable/no negativo; alerta derivada cuando `current_stock <= minimum_stock` |
 | Sales lines | tablas separadas para Equipment y Accessory Product |
+| Sale correction | documento/versionado y movimientos compensatorios; nunca UPDATE destructivo de snapshots |
+| Expenses | documentos económicos tenant-owned, anulables pero no destructivamente editables |
+| Warranties | Supplier y Customer separadas; vigencia del proveedor trazable por Equipment |
 | Payments | tabla hija; V1 controla cardinalidad en Application |
 | Sessions | PostgreSQL, token secreto almacenado solo como hash |
 | Security tokens | tablas específicas; secreto aleatorio fuera de DB y SHA-256 determinista por purpose para lookup |
@@ -104,8 +109,9 @@ Tenant-owned:
 - todos los catálogos de negocio;
 - Equipment, Accessory Product y movimientos;
 - Customers y Suppliers;
-- Sales, lines, payments y Trade-Ins;
+- Sales, lines, corrections, payments y Trade-Ins;
 - Reservations;
+- Expenses y Warranties;
 - archivos y relaciones de archivos;
 - Audit Records;
 - idempotency keys y counters.
@@ -231,6 +237,8 @@ Campos comunes: `id`, `organization_id`, `name`, `name_normalized`, `is_active`,
 - No hay catálogos globales compartidos: futuros templates pueden copiar valores a cada Organization.
 - Estados internos de Equipment/Sale/Reservation y currency no son catálogos configurables.
 - No se borra un valor utilizado.
+- Cada Equipment y Accessory Product referencia exactamente una Category tenant-aware; no se crea relación many-to-many.
+- La ubicación persistente de la policy reusable que decide tracking individual/por cantidad e IMEI obligatorio se resuelve en `DB-DEC-007`; no se hardcodea el nombre “iPhone” en lógica dispersa.
 
 ## 12. Equipment
 
@@ -247,7 +255,9 @@ Campos principales:
 - `reference_sale_price_amount`, `reference_sale_price_currency`;
 - `origin_type`;
 - `notes`;
-- `created_at`, `updated_at`, `archived_at` nullable.
+- fecha de compra/recepción y datos mínimos de Supplier Warranty;
+- `created_at`, `updated_at`, `archived_at`, `written_off_at` nullable;
+- `written_off_reason` (`Theft`, `Loss`) y `written_off_by_user_id` coherentes con status.
 
 Valores descriptivos actuales provienen de catálogos. Los snapshots de venta viven en sale lines.
 
@@ -269,6 +279,7 @@ Se usa `text` + CHECK con valores:
 - `Reserved`;
 - `Sold`;
 - `UnderReview`;
+- `WrittenOff`;
 - `Archived`.
 
 No se usa PostgreSQL enum porque agregar/transicionar estados mediante migrations es menos flexible y Prisma maneja adecuadamente text. No se usa tabla catálogo porque los estados son invariantes internas no configurables.
@@ -293,10 +304,13 @@ No se agregan origin IDs polimórficos débiles.
 - `status` text + CHECK pendiente de valores finales de dominio;
 - `reference_price_amount`, `reference_price_currency`;
 - `current_stock integer NOT NULL CHECK >= 0`;
+- `minimum_stock integer NULL CHECK >= 0`;
 - `current_weighted_average_cost_usd numeric(20,8) NOT NULL CHECK >= 0`;
 - `notes`, timestamps, `archived_at`.
 
 `current_stock` y promedio se almacenan como estado materializado autoritativo para lecturas y concurrencia eficiente. El ledger especializado conserva la explicación. Ambos cambian en la misma transacción; una inconsistencia es un error crítico, no una eventualidad aceptada.
+
+La condición de bajo stock se deriva en consulta como `minimum_stock IS NOT NULL AND current_stock <= minimum_stock`; no se persiste un booleano duplicado. Notificaciones durables futuras requieren su propio alcance.
 
 SKU recibe índice tenant-aware no único hasta resolver su unicidad funcional (`DB-DEC-002`).
 
@@ -350,7 +364,7 @@ En una Sale, `sale_accessory_lines.historical_unit_cost_usd` copia el promedio v
 - `status` (`Active`, `Inactive`);
 - `notes`, timestamps.
 
-No hay CRM avanzado ni unicidad obligatoria de contacto. Una Sale normal permite `customer_id NULL`; Reservation y Trade-In no.
+No hay CRM avanzado ni unicidad obligatoria de contacto. Nombre normalizado solo sirve para búsqueda/advertencia y nunca recibe UNIQUE. La creación puede buscar candidatos por nombre/teléfono/email normalizados; un constraint de bloqueo requiere el identificador fuerte que resuelva `DB-DEC-008`. Una Sale normal permite `customer_id NULL`; Reservation y Trade-In no.
 
 Customers con historia se inactivan, no se eliminan.
 
@@ -377,7 +391,7 @@ Es alcance básico V1. No se crean Purchase, cuentas corrientes ni pagos a prove
 - `created_at`, `confirmed_at`, `cancelled_at`, `cancellation_reason`;
 - timestamps de mantenimiento.
 
-Un Draft puede editarse. Confirmed es un documento económico inmutable salvo su transición controlada a Cancelled. La cancelación no modifica ni elimina los valores originales: agrega estado, metadatos y movimientos compensatorios.
+Un Draft puede editarse. Confirmed es un documento económico inmutable salvo su transición controlada a Cancelled o la aplicación de Sale Corrections relacionadas. La cancelación/corrección no modifica ni elimina los valores originales: agrega documentos, estado efectivo, metadatos y movimientos compensatorios.
 
 ## 22. Human-readable sale numbering
 
@@ -451,7 +465,7 @@ Se elige tabla hija aunque V1 exponga inicialmente un solo pago: evita incrustar
 - valor normalizado USD;
 - `received_at`, `reversed_at`, actor y timestamps.
 
-Una Trade-In exige Customer y su Customer debe coincidir con el de la Sale. El Equipment recibido es la representación autoritativa del bien ingresado; no se duplica su ficha dentro de Trade-In. La base admite varias filas por Sale para no bloquear la decisión pendiente `DOM-DEC-012`, pero la aplicación no habilitará multiplicidad hasta que esa regla se cierre. El estado inicial del Equipment recibido queda en `DB-DEC-004`.
+Una Trade-In exige Customer y su Customer debe coincidir con el de la Sale. El Equipment recibido es la representación autoritativa del bien ingresado; no se duplica su ficha dentro de Trade-In. La relación es **Sale 1:N Trade-In** y no existe UNIQUE sobre `sale_id`; cada `received_equipment_id` sí es único. Cada equipo recibido ingresa `Available` conforme a `DOM-DEC-041` y `DB-DEC-004`.
 
 La igualdad tenant/customer y los cambios de estado que atraviesan varias tablas se validan con transacción de aplicación y, cuando el esquema sea implementado, constraint trigger diferible si aporta una garantía que Prisma no pueda expresar.
 
@@ -469,18 +483,39 @@ No se rebobina historia ni se elimina una Sale confirmada.
 
 Antes de compensar se verifica que todos los elementos sigan reversibles. Si un Equipment recibido por Trade-In fue vendido, reservado o afectado por una operación posterior, la reversión automática se rechaza y se registra `Manual Resolution Required`; no se altera esa historia posterior. Los movements y referencias de origen permiten determinar esta condición sin inferirla solo del estado actual.
 
+## 27A. Sale Corrections
+
+La persistencia futura separa la Sale original de sus correcciones. Como mínimo, `sale_corrections` es tenant-owned y conserva Sale/version previa, estado, reason, actor, `occurred_at`, `effective_at`, snapshots before/after y una idempotency key. Las líneas/deltas tipados y los Inventory Movements compensatorios se escriben atómicamente; no se ejecuta UPDATE sobre líneas/snapshots confirmados.
+
+La representación exacta de versiones, deltas monetarios/pagos y atribución a períodos se cierra en `DB-DEC-009` antes de la migration. Una dependencia posterior no reversible impide aplicar automáticamente la corrección y conserva el intento como conflicto/`Manual Resolution Required`, sin efectos parciales.
+
+## 27B. Warranty persistence impact
+
+Supplier Warranty y Customer Warranty no comparten una única tabla polimórfica. Equipment conserva al menos fecha de compra/recepción, plazo informado y vencimiento de Supplier Warranty; la vigencia es derivable desde el vencimiento y la fecha de consulta. El vencimiento almacenado debe ser consistente con fecha/plazo al registrar o corregir.
+
+Customer Warranty se relacionará con Sale y línea/equipo cubierto, con snapshots de cobertura/vigencia. Defaults, lifecycle y representación final permanecen en `DB-DEC-010`; no se crean Purchase ni warranty claims por anticipado.
+
+## 27C. Expenses
+
+La entidad futura `expenses` es tenant-owned y conserva categoría, descripción, amount, currency, exchange-rate y normalized USD snapshots, `occurred_at`, actor, status (`Recorded`, `Voided`), reason y timestamps. Un Expense ya incluido en resultados se corrige/anula mediante historia explícita; no se borra ni sobrescribe destructivamente.
+
+Las categorías se modelarán con referencia tenant-aware, no texto libre como única fuente, cuando `DB-DEC-012` cierre la taxonomía y tratamiento interno de inversiones. Dashboard agrega desde Sales/lines/Expenses autoritativos; V1 no introduce materialized analytics, warehouse ni una segunda fuente de verdad.
+
 ## 28. Reservations
 
 ### `reservations`
 
 - `id`, `organization_id`, `customer_id`, `equipment_id`;
 - status: `Active`, `ConvertedToSale`, `Cancelled`;
+- `expires_at timestamptz NOT NULL`, elegido por Reservation;
 - depósito opcional con amount/currency/exchange-rate snapshots;
 - `converted_sale_id` nullable UNIQUE;
 - `created_by_user_id`, timestamps de creación, conversión y cancelación;
 - motivo/notes.
 
 Customer y Equipment son obligatorios. La activación cambia el Equipment de Available a Reserved en la misma transacción. Convertir crea/confirma la Sale conforme a las reglas de ventas, enlaza exactamente esa Sale y cambia Equipment a Sold. Cancelar devuelve el Equipment al estado permitido. No existe Reservation sin Equipment en V1.
+
+Al alcanzar `expires_at`, una consulta/alerta identifica la Reservation vencida sin cambiar automáticamente status, Equipment ni saldos. La acción posterior y la evidencia de devolución quedan bloqueadas por `DOM-DEC-058`.
 
 ## 29. Single active reservation per Equipment
 
@@ -500,7 +535,7 @@ PostgreSQL permite varios registros históricos no activos, pero nunca dos activ
 
 Los campos nullable son `deposit_amount`, `deposit_currency`, `deposit_exchange_rate_to_usd` y `deposit_amount_usd`. CHECK exige que sean todos NULL o formen un conjunto válido; amount no puede ser negativo y exchange rate debe ser positivo cuando aplica. NULL significa sin depósito; cero es un importe registrado de cero y no se usa como sustituto de ausencia.
 
-El depósito es snapshot informativo vinculado a la Reservation. Su tratamiento como Payment al convertir y su eventual devolución no se presuponen antes de cerrar reglas de pagos.
+El depósito es un snapshot reembolsable vinculado a la Reservation. Su tratamiento como Payment al convertir y el registro/ejecución de la devolución no se presuponen antes de cerrar `DOM-DEC-058` y las reglas de Payments.
 
 ## 32. Money representation
 
@@ -546,10 +581,12 @@ Es append-only mediante privilegios del rol runtime y controles de implementaci�
 ## 36. Soft deletion
 
 - Organization, Users, Memberships, catálogos, Customers, Suppliers y Products se desactivan o archivan cuando tienen referencias;
-- Equipment se archiva conforme a su lifecycle;
+- Equipment real se archiva o pasa a `WrittenOff` conforme a lifecycle;
 - Sales confirmadas/canceladas, Payments, Trade-Ins, movements y Audit Records nunca se eliminan por flujo normal;
 - Drafts sin efectos, sesiones expiradas e idempotency keys vencidas pueden purgarse con jobs controlados y ventanas documentadas;
 - no se agrega `deleted_at` indiscriminadamente.
+
+Physical delete de Equipment solo se permite para una carga errónea/prueba sin Sale confirmada, Reservation, Trade-In, Warranty ni movement/dependencia histórica crítica. La operación valida FKs con RESTRICT, conserva un Audit Record sin FK destructiva al objeto eliminado y retira atómicamente solo hijos efímeros de creación. Robo/pérdida usa `WrittenOff` y un movement; nunca DELETE.
 
 Los índices y consultas deben distinguir estado activo de historia sin ocultar accidentalmente registros requeridos para auditoría.
 
@@ -606,11 +643,14 @@ Se crean índices por consultas demostradas, con Organization como prefijo cuand
 
 | Área | Índices iniciales |
 | --- | --- |
-| Equipment | `(organization_id, status, created_at, id)`, IMEI único parcial, filtros por brand/model/category |
+| Equipment | `(organization_id, status, created_at, id)`, IMEI único parcial, filtros por brand/model/category, vencimiento de Supplier Warranty |
 | Accessories | `(organization_id, status, name_normalized)`, `(organization_id, sku_normalized)` no único inicialmente |
 | Sales | UNIQUE number, `(organization_id, confirmed_at DESC, id DESC)`, `(organization_id, status, created_at DESC, id DESC)`, customer + date |
 | Reservations | UNIQUE parcial activo por Equipment, status + created date, customer + created date |
 | Customers | name normalizado; email/teléfono normalizados cuando sean filtros reales |
+| Accessory Product | `(organization_id, current_stock)` y filtro parcial/candidato para `current_stock <= minimum_stock` si evidencia de plan lo justifica |
+| Expenses | `(organization_id, occurred_at, id)`, status y category + occurred date |
+| Sale Corrections | `(organization_id, sale_id, occurred_at, id)` y unicidad de versión/idempotencia definida |
 | Sessions | token hash UNIQUE; user + revocation/expiry; expiry para limpieza |
 | Recovery tokens | token hash UNIQUE; user + created date para revocación; expiry para cleanup |
 | Invitations | token hash UNIQUE; Organization + email + lifecycle; expiry para cleanup |
@@ -699,6 +739,12 @@ Toda excepción se documenta en la migration que la introduce.
 | DB-INV-035 | Session | Organization context y version son ambos NULL o ambos presentes | CHECK | switch autorizado y atómico |
 | DB-INV-036 | Identity Rate Limit Window | una ventana agregada por operation/dimension/fingerprint | UNIQUE compuesto | incremento atómico y límites configurados |
 | DB-INV-037 | Security temporary data | creation/expiry/lifecycle timestamps coherentes | CHECK | rechazo de expired/used/revoked y cleanup |
+| DB-INV-038 | Product | exactamente una Category del mismo tenant | FK tenant-aware NOT NULL | validar categoría activa al crear |
+| DB-INV-039 | Accessory Product | minimum stock ausente o >= 0 | CHECK | alerta derivada en query |
+| DB-INV-040 | Equipment | `WrittenOff` exige cause/actor/time coherentes | CHECK + FK | comando y movement atómicos |
+| DB-INV-041 | Sale Correction | original inmutable y corrección versionada/idempotente | FKs + UNIQUE/CHECK por diseño final | use case transaccional |
+| DB-INV-042 | Expense | amount válido; void metadata coherente | CHECK + FK tenant-aware | corrección/void explícito |
+| DB-INV-043 | Reservation | `expires_at` posterior a creación | CHECK | clock/alert sin efecto automático |
 
 Los mecanismos marcados como transacción no se degradan a validaciones UI. Si una garantía cross-row puede expresarse de forma segura en PostgreSQL, se preferirá constraint/constraint trigger; triggers generales con efectos ocultos se evitan.
 
@@ -780,11 +826,13 @@ Organization 1---* Supplier
 Organization 1---* Brand / EquipmentModel / Category / EquipmentCondition
 Organization 1---* Equipment 1---* EquipmentInventoryMovement
 Organization 1---* AccessoryProduct 1---* AccessoryStockMovement
+Organization 1---* Expense
 
 Customer 0..1---* Sale 1---* SaleEquipmentLine *---1 Equipment
                          1---* SaleAccessoryLine *---1 AccessoryProduct
                          1---* SalePayment
                          1---* TradeIn 1---1 received Equipment
+                         1---* SaleCorrection
 
 Customer 1---* Reservation *---1 Equipment
 Reservation 0..1---1 converted Sale
@@ -802,9 +850,11 @@ Todas las relaciones tenant-owned incluyen Organization en sus FKs aunque el map
 | Membership | alta por Organization y cambio de role/status autorizado | Inactive conserva pertenencia histórica | RESTRICT mientras tenga referencias relevantes |
 | Customer | datos operativos editables | Inactive cuando tiene historia | no borrar con Sales/Reservations/Trade-Ins |
 | Supplier | datos básicos editables | Inactive | no borrar al existir referencias presentes/futuras |
-| Equipment | alta manual/Trade-In; cambios mediante lifecycle | Archived terminal según reglas | no borrar con movements/Sales/Reservations |
+| Equipment | alta manual/Trade-In; cambios mediante lifecycle | Archived o WrittenOff según causa | physical delete solo carga errónea sin historia; nunca con movements/Sales/Reservations/Trade-Ins/Warranty |
 | Sale | Draft editable; Confirmed inmutable | Cancelled por compensación, no archive | retención comercial; Draft descartable si no tuvo efectos |
+| Sale Correction | documento versionado, append/confirm | lifecycle pendiente en DB-DEC-009 | retención junto a Sale; no delete normal |
 | Reservation | Active; solo transiciones de estado | ConvertedToSale o Cancelled terminal | historia retenida; no delete normal |
+| Expense | Recorded mediante comando | Voided con reason/actor/time | retención económica; no delete normal tras contabilizar |
 | Inventory Movement | creado junto al cambio de inventario | no aplica | append-only, retención histórica |
 | Audit Record | creado por evento auditable | no aplica | append-only conforme a política de retención/privacidad |
 | Session | login y switching autorizado; last seen throttled | revoked/expired terminal | cleanup temporal por lotes |
@@ -816,15 +866,15 @@ Todas las relaciones tenant-owned incluyen Organization en sus FKs aunque el map
 
 ```text
 Trade-In/alta -> Available -> Reserved -> Sold
-                     |            |         |
-                     v            v         v
-                UnderReview   Available   Available (cancelación autorizada)
-                     |
+                     |   \        |         |
+                     v    \       v         v
+                UnderReview  WrittenOff   Available (cancelación autorizada)
+                     |          (robo/pérdida)
                      v
                   Archived
 ```
 
-Cada flecha aceptada produce movement. El flujo exacto del Equipment recibido por Trade-In depende de `DB-DEC-004`.
+Cada flecha aceptada produce movement. Equipment recibido por Trade-In inicia `Available`; `WrittenOff` conserva causa, actor y fecha.
 
 ### Sale
 
@@ -832,7 +882,7 @@ Cada flecha aceptada produce movement. El flujo exacto del Equipment recibido po
 Draft -> Confirmed -> Cancelled
 ```
 
-No hay regreso a Draft ni edición económica post-confirmación.
+No hay regreso a Draft ni edición económica destructiva post-confirmación. Sale Correction agrega una versión/documento relacionado sin reescribir la original.
 
 ### Reservation
 
@@ -991,11 +1041,16 @@ Los cuatro gaps registrados por SECURITY.md quedan cubiertos: tokens de recovery
 
 | ID | Decisión pendiente | Dependencia | Impacto / deadline |
 | --- | --- | --- | --- |
-| DB-DEC-001 | Cardinalidad V1 de Payments y reconciliación exacta con total/Trade-In | DOM-DEC-025, DOM-DEC-042 | Alto; antes de implementar Sales |
+| DB-DEC-001 | Cardinalidad V1 de Payments/Financing y reconciliación exacta con total/Trade-In | DOM-DEC-025, DOM-DEC-042, DOM-DEC-063 | Crítico; antes de implementar Sales |
 | DB-DEC-002 | Unicidad funcional de SKU por Organization | Regla de Product/Domain | Medio; antes de implementar inventario Accessory |
 | DB-DEC-003 | Status lifecycle definitivo de Accessories | DOM-DEC-046 | Alto; antes de implementar Accessories |
-| DB-DEC-004 | Status inicial y transiciones del Equipment recibido por Trade-In | DOM-DEC-041 | Alto; antes de implementar Trade-In |
 | DB-DEC-005 | Convención de exchange rate y reglas/momentos de redondeo | DOM-DEC-014 | Alto; antes de cualquier cálculo monetario |
+| DB-DEC-007 | Ubicación/versionado de policy de tracking e IMEI obligatorio por definición de producto | DOM-DEC-040, DOM-DEC-060 | Alto; antes de catálogo/Equipment schema |
+| DB-DEC-008 | Identificador fuerte y normalización para bloqueo de Customer duplicado | DOM-DEC-062 | Alto; antes de Customer constraints |
+| DB-DEC-009 | Representación de Sale Correction, deltas, Payments y atribución temporal | DOM-DEC-056, DOM-DEC-054 | Crítico; antes de Sale Correction migration |
+| DB-DEC-010 | Defaults/lifecycle y persistencia exacta de Customer/Supplier Warranty | DOM-DEC-064 | Alto; antes de Warranty migration |
+| DB-DEC-011 | Estructura de Financing V1 y compatibilidad con Payment | DOM-DEC-063, DB-DEC-001 | Crítico; antes de Sales/Financing schema |
+| DB-DEC-012 | Taxonomía Expense y tratamiento de inversiones en Business Result | DOM-DEC-066 | Alto; antes de Expense migration |
 
 Estas decisiones no se rellenan con supuestos en el schema. Las columnas de extensibilidad no autorizan comportamientos de producto todavía pendientes.
 
@@ -1004,12 +1059,13 @@ Estas decisiones no se rellenan con supuestos en el schema. Las columnas de exte
 | ID | Decision | Resolution | Source |
 | --- | --- | --- | --- |
 | DB-DEC-006 | Policies RLS de bootstrap y administración cross-tenant | Organizations, Memberships y tablas internas globales de Identity quedan fuera de RLS operativa inicial; repositories estrictos, grants mínimos y capabilities de plataforma separadas. Invitations conserva tenant scope pero se excluye por acceptance pre-auth. | BCM-005 / BCM-005A |
+| DB-DEC-004 | Status inicial del Equipment recibido por Trade-In | `Available`; no pasa automáticamente por `UnderReview`. La relación Sale 1:N Trade-In ya soporta múltiples equipos recibidos. | BCM-012A / DOM-DEC-012 / DOM-DEC-041 |
 
 ## Architecture review
 
-**Architecture Review Required:** No.
+**Architecture Review Required:** Yes, before implementation of Expenses, Warranty or Financing boundaries.
 
-El diseño respeta el modular monolith, PostgreSQL compartido con tenant identifiers explícitos, sesiones server-side, RBAC simple, Prisma con SQL controlado y ausencia inicial de Redis/broker definidos en BCM-003 y sus ADRs. Las cinco decisiones de negocio todavía pendientes se resolverán en sus fases propietarias; DB-DEC-006 quedó resuelta por BCM-005/005A sin cambiar la arquitectura aprobada.
+Las decisiones continúan compatibles con el modular monolith, PostgreSQL compartido con tenant identifiers explícitos, sesiones server-side, RBAC simple, Prisma con SQL controlado y ausencia inicial de Redis/broker. Sin embargo, Expenses, Warranty y Financing son capacidades nuevas/no detalladas en la lista de módulos aceptada: antes de código debe revisarse su ownership y dependencia entre módulos sin cambiar la topología por defecto. BCM-012A no modifica `ARCHITECTURE.md` ni aprueba esa revisión.
 
 ## Database review checklist
 
@@ -1017,6 +1073,9 @@ El diseño respeta el modular monolith, PostgreSQL compartido con tenant identif
 - [x] Dinero, moneda, exchange rates y snapshots tienen representación explícita.
 - [x] IMEI nullable conserva NULL y unicidad parcial por tenant.
 - [x] Sales, Reservations, Payments y Trade-Ins tienen cardinalidades y pendientes visibles.
+- [x] Multiple Trade-Ins es 1:N y received Equipment inicia Available.
+- [x] Sale Correction conserva original y bloquea schema final detrás de DB-DEC-009.
+- [x] Expenses, Warranty, stock minimum y Customer duplicate tienen impacto/gates visibles.
 - [x] Stock, WAC, reservas y venta de Equipment tienen estrategia de concurrencia.
 - [x] Reversión conserva historia mediante compensaciones.
 - [x] RLS tiene alcance V1 y límites con pooling/Prisma.
@@ -1036,14 +1095,14 @@ Revisión obligatoria realizada contra `PRODUCT.md`, `DOMAIN.md`, `ARCHITECTURE.
 - separa trazabilidad de Equipment de stock agregado de Accessories;
 - conserva costos históricos, exchange snapshots y gross profit potencialmente negativo;
 - implementa Sale/Reservation como transiciones atómicas y reversibles;
-- no introduce descuentos, comisiones, proveedores avanzados, compras ni otros módulos no aprobados;
+- no introduce descuentos, comisiones, proveedores avanzados ni compras;
 - no cierra decisiones de dominio marcadas como pendientes;
 - incorpora requisitos persistentes de SECURITY.md sin exponer hashes o crear IAM/rate limiting genéricos.
 
-No se detectaron contradicciones con decisiones ya aprobadas. Los asuntos abiertos están enumerados como DB-DEC y vinculados a su fase de resolución.
+La contradicción entre edición/eliminación solicitada y snapshots inmutables se resolvió mediante Sale Correction y business void compensatorio. Los asuntos abiertos están enumerados como DB-DEC y vinculados a su fase de resolución.
 
 ## Completion status
 
 **Estado:** Completed
 
-BCM-004 y su addendum BCM-005A definen el diseño lógico de PostgreSQL y sus garantías, sin crear schema Prisma, migrations, base ejecutable ni código de aplicación. BCM-005 está Completed y BCM-006 permanece Pending.
+BCM-004, BCM-005A y la reconciliación BCM-012A definen el diseño lógico de PostgreSQL y sus garantías, sin crear schema Prisma, migrations, base ejecutable ni código de aplicación.

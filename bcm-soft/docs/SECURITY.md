@@ -2,6 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-005 — Security Architecture
+**Última revisión:** BCM-012A — Customer Business Decisions Reconciliation
 
 Este documento define la arquitectura y los estándares de seguridad de BCM SOFT antes de implementar controles. Usa OWASP ASVS y OWASP Top 10 como referencias conceptuales, sin declarar cumplimiento formal.
 
@@ -224,7 +225,11 @@ V1 conserva roles aprobados en DATABASE.md: `Owner`, `Admin`, `Seller`, `Viewer`
 Permissions se definen en código por operación, por ejemplo:
 
 - `inventory.read/create/update/adjust`;
-- `sales.read/create/confirm/cancel`;
+- `inventory.equipment.delete-unreferenced`, `inventory.equipment.write-off`;
+- `sales.read/create/confirm/cancel/correct`;
+- `sales.financials.cost.read`, `sales.financials.profit.read`;
+- `expenses.read/create/correct/void`;
+- `warranties.read/manage`;
 - `customers.read/manage`;
 - `suppliers.read/manage`;
 - `settings.manage`;
@@ -233,6 +238,8 @@ Permissions se definen en código por operación, por ejemplo:
 - `files.read/upload/delete`.
 
 El mapping role→permission se centraliza, versiona y prueba. Owner no equivale a Platform Admin. Policies contextuales agregan ownership, estado y reglas de dominio; RBAC no autoriza por sí solo una transición inválida.
+
+BCM inicia con un único User real Owner/Admin con acceso total dentro de su Organization. La preparación multi-user no cambia el modelo: Owner/Admin administran Memberships conforme a invariantes; Seller puede recibir ventas y stock sin obtener por defecto costos, Gross Profit, Business Result o Expenses; Viewer solo ve secciones concedidas. La visibilidad de navegación es UX, nunca reemplaza enforcement backend. No se crean custom roles ni un IAM dinámico.
 
 ## 16. Deny By Default
 
@@ -512,7 +519,7 @@ Keys son CSPRNG o suficientemente impredecibles, tenant-scoped y operation-scope
 
 ## 58. Financial Integrity
 
-Historical cost, final price, exchange-rate snapshot, Trade-In value, WAC aplicado y Gross Profit son protegidos contra mass assignment y mutation ordinaria. Corrección extraordinaria exige permission específica, reason, valores before/after, audit y operación de dominio que preserve el original. Lecturas financieras/exportaciones aplican permissions y tenant scope más estrictos que datos públicos de catálogo.
+Historical cost, final price, exchange-rate snapshot, Trade-In value, WAC aplicado, Sales Revenue, COGS, Gross Profit, Expenses y Business Result son protegidos contra mass assignment y mutation ordinaria. Sale Correction exige `sales.correct`, reason, valores before/after, audit y operación de dominio que preserve el original. Lecturas de costos/profit/expenses y sus exportaciones aplican permissions separadas y tenant scope más estrictos que datos públicos de catálogo.
 
 ## 59. Backup Security
 
@@ -591,7 +598,13 @@ V1 **no crea Platform Super Admin universal**. Roles Owner/Admin pertenecen a un
 | Operación | Controles mínimos |
 | --- | --- |
 | Cancel Sale | permission, reversibility, idempotency, reason, transaction, audit |
+| Correct Confirmed Sale | `sales.correct`, dependency/reversibility check, before/after, reason, idempotency, transaction, audit |
+| “Delete” Confirmed Sale | se autoriza como cancel/void/reversal; nunca physical delete comercial |
 | Manual stock adjustment | permission específica, delta/cause, actor, lock, audit |
+| Write off Equipment for theft/loss | `inventory.equipment.write-off`, valid state, cause, actor, movement, transaction, audit |
+| Physically delete erroneous Equipment | `inventory.equipment.delete-unreferenced`, proof of no history/dependencies, reason, transaction, audit |
+| Record/correct/void Expense | permission específica, financial before/after, reason for correction/void, audit |
+| Manage Warranty | permission específica, coverage/expiry allowlist, tenant ownership, audit |
 | Deactivate Organization/User | permiso elevado, impacto/sesiones, confirmación, reason, audit |
 | Delete file | ownership de entidad, lifecycle/retention, idempotency, audit |
 | Change Membership role/status | `memberships.manage`, no self-escalation, invariantes Owner, version bump, audit |
@@ -633,6 +646,8 @@ Session, recovery, invitation y otros bearer tokens usan CSPRNG, al menos 128 bi
 | SEC-DEC-017 | Audit append-only; lectura Owner/Admin | Accepted | trazabilidad con exposición limitada | rol auditor dedicado |
 | SEC-DEC-018 | security headers enforcing antes de production | Accepted | defensa browser baseline | frontend/origins definidos |
 | SEC-DEC-019 | lockfile, audit y review supply-chain | Accepted | reproducibilidad y riesgo de paquetes | CI/package manager definido |
+| SEC-DEC-020 | financial visibility separated by semantic permission | Accepted | Seller puede operar ventas/stock sin costos, profit o gastos | nueva matriz de roles o reporting |
+| SEC-DEC-021 | corrections, voids and write-offs require dedicated permissions | Accepted | acciones históricas/destructivas necesitan least privilege, reason y audit | implementación de cada capability |
 
 ## 77. Security Controls Matrix
 

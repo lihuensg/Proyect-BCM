@@ -2,6 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-001 — Product Definition
+**Última actualización:** BCM-012A — Customer Business Decisions Reconciliation
 
 Este documento es la fuente principal de la definición funcional y de negocio de BCM SOFT. Describe el producto y su alcance inicial sin establecer decisiones técnicas, arquitectónicas ni de implementación.
 
@@ -62,11 +63,13 @@ Los objetivos funcionales iniciales son:
 3. Registrar ventas y reflejar sus efectos en el inventario.
 4. Mantener el historial comercial y financiero de las operaciones.
 5. Gestionar clientes, reservas, proveedores y planes canje de manera relacionada.
-6. Analizar la rentabilidad principalmente en USD sin alterar valores históricos.
+6. Analizar resultados en USD y ARS sin alterar valores históricos.
 7. Permitir que los catálogos comerciales habituales sean configurables.
 8. Brindar una visión resumida y actual del negocio.
 9. Validar una primera versión estable mediante el uso cotidiano de BCM.
 10. Sentar una definición funcional reutilizable para negocios similares.
+11. Registrar gastos y distinguir ingresos, costo de mercadería, ganancia bruta y resultado del negocio.
+12. Ofrecer un dashboard V1 medible con resultados en ARS/USD y filtros temporales útiles.
 
 ## 8. Alcance de BCM SOFT V1
 
@@ -84,7 +87,10 @@ La primera versión productiva incluye:
 - plan canje;
 - reservas;
 - lista de precios;
-- dashboard básico;
+- gastos del negocio;
+- dashboard prioritario para la gestión diaria;
+- garantías básicas diferenciadas de cliente y proveedor;
+- capacidad de ventas financiadas limitada por una decisión V1 previa;
 - auditoría funcional de operaciones relevantes.
 
 El alcance V1 prioriza una operación estable y utilizable por BCM por encima de incorporar una mayor cantidad de funcionalidades.
@@ -120,7 +126,9 @@ Los estados iniciales son:
 - En revisión;
 - Archivado.
 
-Cada equipo representa una unidad individual y su disponibilidad debe responder a las operaciones relacionadas.
+Cada equipo representa una unidad individual y su disponibilidad debe responder a las operaciones relacionadas. Cada producto pertenece a una sola categoría específica. Los productos individualizables se cargan unidad por unidad; para iPhone el IMEI individual es obligatorio. Los demás productos pueden administrarse por cantidad cuando no requieran identidad por unidad.
+
+La baja por robo o pérdida es una operación trazable que retira el equipo de la disponibilidad. El borrado físico se reserva para cargas erróneas o de prueba sin historia comercial ni dependencias críticas.
 
 ### 9.2. Inventario de accesorios
 
@@ -142,6 +150,8 @@ La información funcional principal comprende:
 - fotografías.
 
 La cantidad disponible debe disminuir con las ventas y mantenerse consistente ante cambios en las operaciones relacionadas.
+
+Cada producto administrado por cantidad puede definir un stock mínimo. Cuando la cantidad actual sea igual o inferior a ese umbral, BCM SOFT debe mostrar un aviso de bajo stock.
 
 ### 9.3. Monedas y costos
 
@@ -174,6 +184,10 @@ Al confirmar una venta:
 
 Una venta puede incluir accesorios con precio personalizado o precio cero cuando se entreguen como regalo.
 
+Si un producto todavía no existe en inventario, el flujo de venta debe permitir una creación/entrada rápida sin abandonar la operación. La venta solo puede confirmarse después de que exista un registro válido; nunca referencia un producto inexistente.
+
+La UX puede ofrecer `Editar venta` y `Eliminar` sobre una venta confirmada, pero esas acciones no reescriben ni borran silenciosamente la historia. Las correcciones conservan valores anteriores, actor, fecha, motivo, stock, costos y auditoría; la eliminación funcional se implementa como cancelación, anulación, reversión o corrección administrativa según corresponda.
+
 ### 9.5. Clientes
 
 Mantiene un registro centralizado de clientes. Debe permitir:
@@ -186,9 +200,11 @@ Mantiene un registro centralizado de clientes. Debe permitir:
 
 Debe ser posible crear un cliente durante una venta sin abandonar esa operación.
 
+Al crear un cliente, el sistema debe advertir posibles duplicados y bloquear únicamente cuando exista un identificador suficientemente fuerte. El nombre por sí solo no es criterio seguro de unicidad; el criterio definitivo deberá contemplar futuros datos normalizados como teléfono, email o documento.
+
 ### 9.6. Plan canje
 
-Permite que una venta incluya un equipo entregado por el cliente como parte de pago.
+Permite que una venta incluya uno o múltiples equipos entregados por el cliente como parte de pago.
 
 En un plan canje, BCM SOFT debe:
 
@@ -199,6 +215,8 @@ En un plan canje, BCM SOFT debe:
 - utilizar el valor de toma como costo inicial del equipo recibido;
 - mantener la relación entre el equipo recibido y la venta que originó su ingreso.
 
+Cada equipo recibido ingresa inicialmente como `Available`; no pasa por `Under Review` de forma automática.
+
 ### 9.7. Reservas
 
 Permite asociar temporalmente un equipo disponible con un cliente. Una reserva registra:
@@ -207,9 +225,10 @@ Permite asociar temporalmente un equipo disponible con un cliente. Una reserva r
 - cliente;
 - monto de seña;
 - fecha;
+- vencimiento elegido para esa reserva;
 - observaciones.
 
-Mientras una reserva esté activa, el equipo debe figurar como reservado. Si la reserva se cancela, el equipo debe recuperar el estado que corresponda. Una reserva activa puede derivar posteriormente en una venta.
+Mientras una reserva esté activa, el equipo debe figurar como reservado. La duración habitual ronda diez días, pero debe poder elegirse por reserva. La seña es reembolsable. Al alcanzar el vencimiento, el sistema debe avisar y recordar la gestión de su devolución, sin ejecutar automáticamente un movimiento financiero todavía no definido. Si la reserva se cancela, el equipo debe recuperar el estado que corresponda. Una reserva activa puede derivar posteriormente en una venta.
 
 ### 9.8. Proveedores
 
@@ -246,33 +265,53 @@ Genera una lista de productos disponibles para la venta. Debe servir para:
 - consulta interna;
 - copiar información;
 - compartir por WhatsApp;
-- imprimir;
-- exportar en formatos que se definan posteriormente.
+- obtener una salida de texto ordenada y lista para enviar.
 
 La lista debe mostrar únicamente productos disponibles para comercialización.
 
+PDF, imagen, impresión especializada e integración directa con WhatsApp no son prioridad de V1 y requieren una decisión posterior.
+
 ### 9.11. Dashboard
 
-Resume información relevante del negocio. Los indicadores iniciales son:
+Es una prioridad alta de MVP/V1 y resume información relevante del negocio. Debe filtrar por día, semana, mes o rango personalizado desde/hasta. La línea base medible incluye:
 
 - equipos disponibles;
 - accesorios disponibles;
-- ventas del período;
-- facturación;
-- rentabilidad;
+- ingresos por ventas del período en ARS y USD;
+- cantidad de equipos/productos individualizados vendidos;
+- cantidad de unidades de productos por cantidad/accesorios vendidas;
+- productos más vendidos;
+- ganancia bruta y margen por producto;
+- ganancia bruta total en ARS y USD;
+- gastos registrados del período;
+- resultado del negocio en ARS y USD;
 - productos reservados;
 - productos con bajo stock;
 - operaciones recientes.
 
-Las reglas detalladas de cálculo se definirán posteriormente.
+`Ingresos por ventas − costo de mercadería vendida = ganancia bruta`; `ganancia bruta − gastos registrados = resultado del negocio`. BCM SOFT no denomina a este resultado “ganancia neta” porque V1 no implementa impuestos, amortizaciones, intereses completos ni contabilidad general. La conversión y el redondeo ARS/USD deben cerrarse antes de implementar los cálculos.
 
 ### 9.12. Usuarios y negocio
 
 Representa la necesidad funcional de que un negocio tenga múltiples usuarios y de que, en el futuro, distintos negocios similares utilicen BCM SOFT con información independiente.
 
-V1 contempla autenticación, un negocio u organización, usuarios y permisos básicos. El detalle de organizaciones, roles, permisos y aislamiento se definirá en fases posteriores.
+Inicialmente BCM operará con un único User real `Owner/Admin` con acceso total. V1 permanece preparado para múltiples Users, creación de usuarios, roles definidos en código y permisos por operación/sección. Un vendedor puede acceder a ventas y stock sin recibir automáticamente costos, ganancias o gastos. No se requiere un IAM dinámico.
 
-### 9.13. Auditoría funcional
+### 9.13. Gastos
+
+Permite registrar egresos del negocio, incluidos muebles, inversiones, servicios y otros gastos. Cada registro debe conservar fecha, categoría, descripción, importe, moneda/cotización cuando corresponda, autor y trazabilidad. Los gastos se muestran en el dashboard y participan del resultado del negocio conforme a las definiciones económicas de V1. La lista definitiva de categorías requiere decisión previa.
+
+### 9.14. Garantías
+
+BCM SOFT distingue dos capacidades: **Customer Warranty**, ofrecida por el negocio a su cliente, y **Supplier Warranty**, ofrecida por un proveedor al negocio. No son el mismo lifecycle ni se compensan entre sí.
+
+Como mínimo, cada Equipment puede conservar fecha de compra/recepción, plazo de garantía del proveedor y vencimiento para consultar si sigue vigente. Los plazos predeterminados, la cobertura de Customer Warranty y los flujos de reclamo requieren una decisión antes de implementarse.
+
+### 9.15. Financiamiento
+
+El producto debe admitir ventas financiadas de uso ocasional, con cantidad y máximo de cuotas, intereses, recargos y condiciones aplicables. El alcance V1 exacto se decidirá junto con Payments antes de implementar; no se construirá una plataforma crediticia compleja.
+
+### 9.16. Auditoría funcional
 
 Las operaciones comerciales relevantes deben conservar trazabilidad suficiente para comprender qué ocurrió y mantener relacionado su efecto sobre inventario, ventas, reservas y equipos recibidos mediante plan canje.
 
@@ -286,17 +325,18 @@ El alcance exacto de los eventos y datos auditados se definirá en fases posteri
 2. Selecciona uno o más equipos y las cantidades de accesorios.
 3. Asocia un cliente existente o crea uno durante la operación.
 4. Registra moneda, cotización cuando corresponda, medio de pago, precios o descuentos y observaciones.
-5. Confirma la venta.
-6. Los equipos dejan de estar disponibles y el stock de accesorios disminuye.
-7. La operación queda incorporada al historial del cliente y a los resultados del negocio.
+5. Si falta un producto, realiza su creación/entrada rápida y valida que el registro de inventario exista.
+6. Confirma la venta.
+7. Los equipos dejan de estar disponibles y el stock de accesorios disminuye.
+8. La operación queda incorporada al historial del cliente y a los resultados del negocio.
 
 ### 10.2. Venta con plan canje
 
 1. Se inicia una venta.
-2. Se registran los datos y el valor de toma del equipo entregado por el cliente.
+2. Se registran los datos y el valor de toma de uno o más equipos entregados por el cliente.
 3. El valor de toma reduce el saldo de la venta.
-4. Al confirmar la operación, el equipo recibido ingresa al inventario con ese valor como costo inicial.
-5. La venta y el equipo recibido permanecen relacionados.
+4. Al confirmar la operación, cada equipo recibido ingresa al inventario como `Available` con su valor de toma como costo inicial.
+5. La venta y todos los equipos recibidos permanecen relacionados.
 
 ### 10.3. Creación y conversión de una reserva
 
@@ -333,7 +373,15 @@ El alcance exacto de los eventos y datos auditados se definirá en fases posteri
 12. La lista de precios solo debe incluir productos disponibles para comercialización.
 13. Las operaciones relacionadas deben mantener coherentes el inventario, los estados y las cantidades.
 14. Las operaciones comerciales relevantes deben conservar trazabilidad funcional.
-15. Las reglas exactas de modificación, anulación, reversión y recuperación se definirán antes de habilitar esos comportamientos.
+15. Toda modificación, anulación, reversión o recuperación utiliza la operación explícita definida; los casos con dependencias no reversibles esperan su Decision Gate.
+16. Cada producto pertenece a exactamente una categoría específica.
+17. Un iPhone se registra por unidad y exige IMEI; un producto no individualizable puede gestionarse por cantidad.
+18. Una venta confirmada solo se corrige mediante historia versionada/compensatoria y nunca mediante edición destructiva.
+19. Una venta confirmada no se elimina físicamente mediante el flujo de producto.
+20. Robo o pérdida de Equipment produce una baja operacional trazable; no un borrado físico.
+21. Una Sale puede contener múltiples Trade-Ins.
+22. Stock actual igual o inferior al mínimo configurado produce un aviso.
+23. Customer Warranty y Supplier Warranty son conceptos separados.
 
 Las reglas detalladas de consistencia, reversión y trazabilidad se desarrollarán en `DOMAIN.md` durante BCM-002.
 
@@ -361,8 +409,8 @@ Quedan fuera de V1, salvo redefinición posterior:
 - ecommerce;
 - contabilidad completa;
 - conciliación bancaria;
-- financiamiento avanzado;
-- garantías avanzadas;
+- plataforma crediticia avanzada, scoring, cobranza o contabilidad de préstamos;
+- automatización avanzada de garantías y reclamos;
 - sistema de tickets;
 - inteligencia artificial;
 - múltiples monedas internacionales adicionales;
@@ -394,7 +442,8 @@ La primera versión se considerará funcionalmente exitosa cuando:
 - las reservas reflejen correctamente la disponibilidad de los equipos;
 - los usuarios puedan consultar el historial de clientes y operaciones;
 - los valores históricos conserven la moneda y cotización utilizadas;
-- la rentabilidad pueda analizarse principalmente en USD;
+- los resultados comerciales puedan analizarse en USD y ARS;
+- los gastos y el resultado del negocio puedan consultarse por período en ARS y USD;
 - los catálogos habituales puedan administrarse sin cambios en el producto;
 - la lista de precios y el dashboard brinden información útil para la actividad diaria;
 - las operaciones relevantes cuenten con trazabilidad funcional;
@@ -406,12 +455,11 @@ Las métricas cuantitativas y los mecanismos de validación se definirán en fas
 
 Las siguientes cuestiones requieren definición funcional posterior y no se resuelven en este documento:
 
-- reglas exactas para modificar una venta confirmada;
-- reglas y permisos de anulación;
-- efectos de anulaciones y correcciones sobre inventario e historial financiero;
+- detalle de una corrección de venta cuando existan productos revendidos u otras dependencias posteriores;
+- permisos definitivos y efectos financieros de anulaciones/correcciones;
 - tratamiento de devoluciones y cambios;
-- alcance y políticas de garantías;
-- opciones de financiamiento;
+- plazos predeterminados, cobertura y lifecycle de Customer/Supplier Warranty;
+- profundidad V1 del financiamiento y su integración con Payments;
 - compras a proveedores y movimientos de ingreso;
 - control de caja y cierres;
 - necesidad y alcance de múltiples sucursales;
@@ -419,13 +467,14 @@ Las siguientes cuestiones requieren definición funcional posterior y no se resu
 - reglas de descuentos y promociones;
 - tratamiento de impuestos;
 - tipos y emisión de comprobantes;
-- políticas de reserva, cancelación y tratamiento de señas;
-- vencimiento automático de reservas;
-- reglas de bajo stock para accesorios;
-- fórmulas y períodos exactos de los indicadores del dashboard;
+- aplicación y registro financiero de la seña al convertir, cancelar o vencer una reserva;
+- efecto operacional del vencimiento sobre reserva y Equipment, sin automatizar devolución;
+- categorías definitivas de gastos y tratamiento interno de inversiones;
+- criterio fuerte exacto para impedir Customers duplicados;
+- convención y redondeo para agregados ARS/USD del dashboard;
 - alcance detallado de la auditoría funcional;
-- definición detallada de tipos de usuario y permisos;
+- matriz final de permisos por rol dentro del RBAC definido;
 - alcance del aislamiento entre negocios;
-- formatos de exportación de la lista de precios;
+- formatos de lista de precios posteriores al texto V1;
 - tratamiento de diferencias de cotización y redondeos;
 - estados y transiciones detalladas de equipos y operaciones.
