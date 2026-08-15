@@ -371,7 +371,7 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 | BCM-API-001 | Completed | Medium | FND-002 | Minimal NestJS bootstrap and module layout; no empty business modules |
 | BCM-WEB-001 | Completed | Medium | FND-002 | Minimal React/Vite entry, router, provider composition, error boundary, query client, placeholder shell only |
 | BCM-TST-001 | Completed | Medium | API-001, WEB-001 | Vitest on both sides; RTL/user-event for Web; no permanent mock architecture |
-| BCM-FND-003 | Pending | High | API-001, WEB-001 | Fail-fast environment validation; secrets server-only; `VITE_*` public boundary explicit |
+| BCM-FND-003 | Completed | High | API-001, WEB-001 | Fail-fast environment validation; secrets server-only; `VITE_*` public boundary explicit |
 | BCM-OBS-001 | Pending | High | API-001, FND-003 | Pino adapter, request IDs, safe errors, liveness/readiness foundation, redaction tests |
 | BCM-CI-001 | Pending | Medium | FND-001..003, TST-001, OBS-001 | GitHub Actions frozen install, lint, typecheck, unit, build; RG-01 evidence |
 | BCM-DB-001 | Pending | High | RG-01 | PostgreSQL local/test strategy, Prisma setup, isolated test DB workflow; no SQLite |

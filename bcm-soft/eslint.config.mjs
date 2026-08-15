@@ -22,4 +22,34 @@ export default defineConfig(
       ],
     },
   },
+  {
+    files: ["apps/api/src/**/*.ts"],
+    ignores: ["apps/api/src/config/server-config.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "MemberExpression[object.name='process'][property.name='env']",
+          message:
+            "Read process.env only through the server configuration boundary.",
+        },
+      ],
+    },
+  },
+  {
+    files: ["apps/web/src/**/*.{ts,tsx}"],
+    ignores: ["apps/web/src/config/public-config.ts"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector:
+            "MemberExpression[object.type='MetaProperty'][property.name='env']",
+          message:
+            "Read import.meta.env only through the public Web configuration boundary.",
+        },
+      ],
+    },
+  },
 );
