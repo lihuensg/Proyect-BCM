@@ -391,7 +391,7 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 | BCM-DEC-CAT-001 | Pending | High | RG-04 | Resolve catalog historical lifecycle and required manual-intake data before persistence; no code |
 | BCM-CAT-001 | Pending | High | RG-04, DS-001, DEC-CAT-001 | One selected catalog end-to-end: DB, repository, permission, REST, real list/form, isolation/tests; RG-05 |
 
-RG-01 follows BCM-CI-001.
+RG-01 is **Approved** and follows BCM-CI-001.
 RG-02 follows BCM-DB-004, not merely the first migration.
 RG-03 follows BCM-WEB-002 and all identity security tests.
 RG-04 follows BCM-TEN-004 and is the hard boundary before business data.
