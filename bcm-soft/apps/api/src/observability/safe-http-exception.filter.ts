@@ -7,9 +7,9 @@ import {
 } from "@nestjs/common";
 import { HttpAdapterHost } from "@nestjs/core";
 
-import type { PinoLoggerAdapter } from "./pino-logger.adapter";
-import type { RequestContext } from "./request-context";
-import { SafeHttpException } from "./safe-http-exception";
+import type { PinoLoggerAdapter } from "./pino-logger.adapter.js";
+import type { RequestContext } from "./request-context.js";
+import { SafeHttpException } from "./safe-http-exception.js";
 
 type SafeErrorResponse = Readonly<{
   statusCode: number;

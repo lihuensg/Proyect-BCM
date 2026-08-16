@@ -2,12 +2,12 @@ import "reflect-metadata";
 
 import { NestFactory } from "@nestjs/core";
 
-import { AppModule } from "./app.module";
-import { loadServerConfig } from "./config/server-config";
+import { AppModule } from "./app.module.js";
+import { loadServerConfig } from "./config/server-config.js";
 import {
   configureObservability,
   createObservability,
-} from "./observability/observability";
+} from "./observability/observability.js";
 
 async function bootstrap(): Promise<void> {
   const config = loadServerConfig();

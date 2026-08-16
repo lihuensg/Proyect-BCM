@@ -6,8 +6,8 @@ import pino, {
   type LoggerOptions,
 } from "pino";
 
-import type { ServerConfig } from "../config/server-config";
-import type { RequestContext } from "./request-context";
+import type { ServerConfig } from "../config/server-config.js";
+import type { RequestContext } from "./request-context.js";
 
 export type LogFields = Readonly<Record<string, unknown>>;
 

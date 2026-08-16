@@ -5,7 +5,7 @@
   "scripts": {
     "build": "corepack pnpm --recursive --if-present build",
     "typecheck": "corepack pnpm --recursive --if-present typecheck",
-    "test": "corepack pnpm --recursive --if-present test",
+    "test": "corepack pnpm --recursive --workspace-concurrency=1 --if-present test",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

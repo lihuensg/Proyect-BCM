@@ -1,0 +1,28 @@
+name: bcm-soft-postgres
+
+services:
+  postgres:
+    image: postgres:18.4-alpine3.24@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15
+    environment:
+      POSTGRES_DB: ${BCM_POSTGRES_DATABASE:?BCM_POSTGRES_DATABASE is required}
+      POSTGRES_PASSWORD: ${BCM_POSTGRES_PASSWORD:?BCM_POSTGRES_PASSWORD is required}
+      POSTGRES_USER: ${BCM_POSTGRES_USER:?BCM_POSTGRES_USER is required}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready --username=$$POSTGRES_USER --dbname=$$POSTGRES_DB",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "127.0.0.1:${BCM_POSTGRES_PORT:-0}:5432"
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+volumes:
+  postgres_data:

@@ -1,6 +1,12 @@
+import {
+  loadRuntimeDatabaseConfig,
+  type RuntimeDatabaseConfig,
+} from "./database-config.js";
+
 type RuntimeEnvironment = "development" | "test" | "production";
 
 export type ServerConfig = Readonly<{
+  database: RuntimeDatabaseConfig;
   environment: RuntimeEnvironment;
   port: number;
 }>;
@@ -65,6 +71,7 @@ export function loadServerConfig(
   const runtimeEnvironment = readRuntimeEnvironment(environment);
 
   return Object.freeze({
+    database: loadRuntimeDatabaseConfig(environment),
     environment: runtimeEnvironment,
     port: readPort(environment, runtimeEnvironment),
   });

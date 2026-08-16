@@ -1,14 +1,14 @@
 import type { INestApplication } from "@nestjs/common";
 import { HttpAdapterHost } from "@nestjs/core";
 
-import type { ServerConfig } from "../config/server-config";
+import type { ServerConfig } from "../config/server-config.js";
 import {
   PinoLoggerAdapter,
   type LoggerAdapterOptions,
-} from "./pino-logger.adapter";
-import { RequestContext } from "./request-context";
-import { REQUEST_ID_HEADER, resolveRequestId } from "./request-id";
-import { SafeHttpExceptionFilter } from "./safe-http-exception.filter";
+} from "./pino-logger.adapter.js";
+import { RequestContext } from "./request-context.js";
+import { REQUEST_ID_HEADER, resolveRequestId } from "./request-id.js";
+import { SafeHttpExceptionFilter } from "./safe-http-exception.filter.js";
 
 type HttpRequest = Readonly<{
   headers: Readonly<Record<string, string | string[] | undefined>>;

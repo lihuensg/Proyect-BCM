@@ -6,11 +6,14 @@ import { Controller, Get, Module, type INestApplication } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { AppModule } from "../app.module";
-import type { ServerConfig } from "../config/server-config";
-import { configureObservability, createObservability } from "./observability";
-import { REQUEST_ID_HEADER } from "./request-id";
-import { SafeHttpException } from "./safe-http-exception";
+import { AppModule } from "../app.module.js";
+import type { ServerConfig } from "../config/server-config.js";
+import {
+  configureObservability,
+  createObservability,
+} from "./observability.js";
+import { REQUEST_ID_HEADER } from "./request-id.js";
+import { SafeHttpException } from "./safe-http-exception.js";
 
 const VALID_REQUEST_ID = "d9428888-122b-4b8b-a38f-4fd56a544759";
 const SECOND_REQUEST_ID = "7ebdb388-8d30-4a8f-9f74-944b83f58429";
@@ -50,6 +53,10 @@ describe("API observability foundation", () => {
     },
   });
   const config: ServerConfig = Object.freeze({
+    database: Object.freeze({
+      runtimeUrl:
+        "postgresql://test-user:test-password@127.0.0.1:5432/bcm_soft_test",
+    }),
     environment: "test",
     port: 0,
   });

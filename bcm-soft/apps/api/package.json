@@ -2,22 +2,35 @@
   "name": "@bcm-soft/api",
   "version": "0.0.0",
   "private": true,
-  "type": "commonjs",
+  "type": "module",
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
+    "build": "corepack pnpm run prisma:generate && tsc --project tsconfig.build.json",
+    "db:local:down": "docker compose --env-file ../../infrastructure/postgres/.env -f ../../infrastructure/postgres/compose.yaml -p bcm-soft-local down",
+    "db:local:up": "docker compose --env-file ../../infrastructure/postgres/.env -f ../../infrastructure/postgres/compose.yaml -p bcm-soft-local up -d --wait",
+    "db:migrate:deploy": "prisma migrate deploy --config prisma.config.ts",
+    "db:migrate:dev": "prisma migrate dev --config prisma.config.ts",
+    "db:migrate:status": "prisma migrate status --config prisma.config.ts",
+    "prisma:generate": "cd prisma && prisma generate --schema schema.prisma",
     "start": "node dist/main.js",
-    "test": "vitest run --environment node",
-    "typecheck": "tsc --project tsconfig.json --noEmit"
+    "test": "corepack pnpm run prisma:generate && corepack pnpm run test:unit && corepack pnpm run test:db",
+    "test:db": "node scripts/run-database-tests.ts",
+    "test:unit": "vitest run --environment node --exclude test/integration/**",
+    "typecheck": "corepack pnpm run prisma:generate && tsc --project tsconfig.json --noEmit && tsc --project tsconfig.scripts.json --noEmit"
   },
   "dependencies": {
     "@nestjs/common": "11.1.28",
     "@nestjs/core": "11.1.28",
     "@nestjs/platform-express": "11.1.28",
+    "@prisma/adapter-pg": "7.9.1",
+    "@prisma/client": "7.9.1",
+    "pg": "8.23.0",
     "pino": "10.3.1",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2"
   },
   "devDependencies": {
-    "@types/node": "24.13.3"
+    "@types/node": "24.13.3",
+    "@types/pg": "8.21.0",
+    "prisma": "7.9.1"
   }
 }

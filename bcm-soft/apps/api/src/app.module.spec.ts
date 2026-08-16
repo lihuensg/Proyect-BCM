@@ -4,7 +4,7 @@ import type { INestApplication } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { AppModule } from "./app.module";
+import { AppModule } from "./app.module.js";
 
 describe("API foundation", () => {
   let app: INestApplication | undefined;
