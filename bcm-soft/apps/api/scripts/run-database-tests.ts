@@ -30,6 +30,7 @@ function run(
   command: string,
   arguments_: string[],
   options: Readonly<{
+    acceptedStatuses?: readonly number[];
     captureOutput?: boolean;
     environment?: NodeJS.ProcessEnv;
   }> = {},
@@ -39,18 +40,23 @@ function run(
     encoding: "utf8",
     env: options.environment ?? process.env,
     shell: false,
-    stdio: options.captureOutput ? ["ignore", "pipe", "inherit"] : "inherit",
+    stdio: options.captureOutput ? ["ignore", "pipe", "pipe"] : "inherit",
   });
 
   if (result.error !== undefined) {
     throw result.error;
   }
 
-  if (result.status !== 0) {
+  const acceptedStatuses = options.acceptedStatuses ?? [0];
+
+  if (result.status === null || !acceptedStatuses.includes(result.status)) {
     throw new Error(`${command} exited with status ${String(result.status)}.`);
   }
 
-  return result.stdout?.trim() ?? "";
+  return [result.stdout, result.stderr]
+    .filter((output): output is string => output !== undefined)
+    .join("\n")
+    .trim();
 }
 
 function runPnpm(arguments_: string[], environment: NodeJS.ProcessEnv): void {
@@ -145,6 +151,30 @@ async function main(): Promise<void> {
       ["exec", "prisma", "migrate", "deploy", "--config", "prisma.config.ts"],
       testEnvironment,
     );
+    const migrationStatus = run(
+      process.execPath,
+      [
+        process.env.npm_execpath ?? "",
+        "exec",
+        "prisma",
+        "migrate",
+        "status",
+        "--config",
+        "prisma.config.ts",
+      ],
+      {
+        acceptedStatuses: [0, 1],
+        captureOutput: true,
+        environment: testEnvironment,
+      },
+    );
+
+    if (
+      !migrationStatus.includes("No migration found in prisma/migrations") &&
+      !migrationStatus.includes("Database schema is up to date")
+    ) {
+      throw new Error("Prisma migration status is not consistent.");
+    }
     runPnpm(
       [
         "exec",

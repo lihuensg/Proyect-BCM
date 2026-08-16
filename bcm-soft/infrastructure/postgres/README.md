@@ -31,7 +31,7 @@ The shared local credential is a temporary foundation limitation. Production-lik
 - Migrations are forward-only and must never be edited after application.
 - Direct schema synchronization shortcuts are not part of the migration workflow.
 
-BCM-DB-001 intentionally has no SQL migration or application model. The first durable schema primitives and reviewed migration belong to BCM-DB-002.
+BCM-DB-001 and BCM-DB-002 intentionally have no SQL migration or application model. BCM-DB-002 proves database primitives with integration-only fixtures in ephemeral PostgreSQL and verifies `migrate deploy` plus `migrate status` with zero durable migrations. The first durable migration and real product tables belong to BCM-DB-003.
 
 ## Test isolation and cleanup
 
