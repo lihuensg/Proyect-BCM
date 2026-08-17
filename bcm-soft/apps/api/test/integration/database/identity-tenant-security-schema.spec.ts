@@ -3,7 +3,6 @@ import { randomBytes } from "node:crypto";
 import { Client, DatabaseError } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { loadServerConfig } from "../../../src/config/server-config.js";
 import { assertSafeTestDatabaseTarget } from "../../../src/infrastructure/database/test-database-target.js";
 import { generateUuidV7 } from "../../../src/infrastructure/identifiers/uuid-v7.js";
 
@@ -89,12 +88,12 @@ const expectedIndexes = [
 
 describe("identity and tenant security persistence foundation", () => {
   const sqlClient = new Client({
-    connectionString: loadServerConfig(process.env).database.runtimeUrl,
+    connectionString: process.env.DIRECT_DATABASE_URL,
   });
 
   beforeAll(async () => {
     assertSafeTestDatabaseTarget(
-      process.env.TEST_DATABASE_URL ?? "",
+      process.env.DIRECT_DATABASE_URL ?? "",
       process.env.NODE_ENV,
     );
     await sqlClient.connect();

@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -7,15 +5,6 @@ import { loadServerConfig } from "../../../src/config/server-config.js";
 import { PrismaClientLifecycle } from "../../../src/infrastructure/database/prisma-client-lifecycle.js";
 import { generateUuidV7 } from "../../../src/infrastructure/identifiers/uuid-v7.js";
 import { assertSafeTestDatabaseTarget } from "../../../src/infrastructure/database/test-database-target.js";
-
-const fixtureUrl = new URL(
-  "../../fixtures/database/database-primitives.sql",
-  import.meta.url,
-);
-const cleanupSql = `
-  DROP TABLE IF EXISTS test_database_primitives;
-  DROP TABLE IF EXISTS test_primitive_parents;
-`;
 
 type PrimitiveRow = Readonly<{
   created_at: Date;
@@ -39,13 +28,11 @@ describe("PostgreSQL database primitives", () => {
     assertSafeTestDatabaseTarget(databaseUrl, process.env.NODE_ENV);
 
     await sqlClient.connect();
-    await sqlClient.query(await readFile(fixtureUrl, "utf8"));
     await lifecycle.connect();
   });
 
   afterAll(async () => {
     await lifecycle.disconnect();
-    await sqlClient.query(cleanupSql);
     await sqlClient.end();
   });
 

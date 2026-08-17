@@ -1,4 +1,5 @@
 import { PrismaPg } from "@prisma/adapter-pg";
+import type { PoolConfig } from "pg";
 
 import { PrismaClient } from "../../generated/prisma/client.js";
 
@@ -6,8 +7,14 @@ export class PrismaClientLifecycle {
   readonly #client: PrismaClient;
   #connected = false;
 
-  constructor(runtimeDatabaseUrl: string) {
-    const adapter = new PrismaPg({ connectionString: runtimeDatabaseUrl });
+  constructor(
+    runtimeDatabaseUrl: string,
+    poolConfiguration: Pick<PoolConfig, "max"> = {},
+  ) {
+    const adapter = new PrismaPg({
+      connectionString: runtimeDatabaseUrl,
+      ...poolConfiguration,
+    });
     this.#client = new PrismaClient({ adapter });
   }
 

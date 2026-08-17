@@ -7,6 +7,8 @@ const RUNTIME_DATABASE_URL =
   "postgresql://runtime-user:runtime-password@database.internal:5432/bcm_soft";
 const MIGRATION_DATABASE_URL =
   "postgresql://migration-user:migration-password@database.internal:5432/bcm_soft";
+const SHADOW_DATABASE_URL =
+  "postgresql://migration-user:migration-password@database.internal:5432/bcm_soft_shadow";
 
 describe("loadServerConfig", () => {
   it("returns typed immutable configuration for valid server values", () => {
@@ -121,12 +123,22 @@ describe("loadServerConfig", () => {
   it("keeps migration credentials separate from runtime configuration", () => {
     const migrationConfig = loadMigrationDatabaseConfig({
       DIRECT_DATABASE_URL: MIGRATION_DATABASE_URL,
+      SHADOW_DATABASE_URL,
     });
 
     expect(migrationConfig).toEqual({
       migrationUrl: MIGRATION_DATABASE_URL,
+      shadowDatabaseUrl: SHADOW_DATABASE_URL,
     });
     expect(Object.isFrozen(migrationConfig)).toBe(true);
+  });
+
+  it("keeps the shadow database optional for deploy-only environments", () => {
+    expect(
+      loadMigrationDatabaseConfig({
+        DIRECT_DATABASE_URL: MIGRATION_DATABASE_URL,
+      }),
+    ).toEqual({ migrationUrl: MIGRATION_DATABASE_URL });
   });
 
   it("rejects a missing direct migration database URL", () => {

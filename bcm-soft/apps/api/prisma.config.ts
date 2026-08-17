@@ -7,6 +7,9 @@ const migrationConfig = loadMigrationDatabaseConfig(process.env);
 export default defineConfig({
   datasource: {
     url: migrationConfig.migrationUrl,
+    ...(migrationConfig.shadowDatabaseUrl === undefined
+      ? {}
+      : { shadowDatabaseUrl: migrationConfig.shadowDatabaseUrl }),
   },
   migrations: {
     path: "prisma/migrations",

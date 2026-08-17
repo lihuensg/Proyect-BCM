@@ -49,8 +49,13 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
+      - name: Test application units
+        run: |
+          pnpm --filter @bcm-soft/api test:unit
+          pnpm --filter @bcm-soft/web test
+
+      - name: Verify PostgreSQL migrations, roles, and RLS
+        run: pnpm --filter @bcm-soft/api test:db
 
       - name: Build
         run: pnpm build

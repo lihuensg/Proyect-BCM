@@ -29,3 +29,10 @@ CREATE INDEX ix_test_database_primitives__created_at
 CREATE UNIQUE INDEX ux_test_database_primitives__active_code_normalized__active
   ON test_database_primitives (active_code_normalized)
   WHERE is_active;
+
+REVOKE ALL PRIVILEGES ON TABLE test_primitive_parents FROM PUBLIC;
+REVOKE ALL PRIVILEGES ON TABLE test_database_primitives FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE
+  test_primitive_parents,
+  test_database_primitives
+TO bcm_soft_runtime;

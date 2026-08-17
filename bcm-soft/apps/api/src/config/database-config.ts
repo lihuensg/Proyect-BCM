@@ -4,6 +4,7 @@ export type RuntimeDatabaseConfig = Readonly<{
 
 export type MigrationDatabaseConfig = Readonly<{
   migrationUrl: string;
+  shadowDatabaseUrl?: string;
 }>;
 
 function databaseConfigurationError(
@@ -15,7 +16,7 @@ function databaseConfigurationError(
 
 function readPostgreSqlUrl(
   environment: NodeJS.ProcessEnv,
-  variableName: "DATABASE_URL" | "DIRECT_DATABASE_URL",
+  variableName: "DATABASE_URL" | "DIRECT_DATABASE_URL" | "SHADOW_DATABASE_URL",
 ): string {
   const value = environment[variableName];
 
@@ -55,7 +56,17 @@ export function loadRuntimeDatabaseConfig(
 export function loadMigrationDatabaseConfig(
   environment: NodeJS.ProcessEnv,
 ): MigrationDatabaseConfig {
+  const shadowDatabaseUrl = environment.SHADOW_DATABASE_URL;
+
   return Object.freeze({
     migrationUrl: readPostgreSqlUrl(environment, "DIRECT_DATABASE_URL"),
+    ...(shadowDatabaseUrl === undefined
+      ? {}
+      : {
+          shadowDatabaseUrl: readPostgreSqlUrl(
+            environment,
+            "SHADOW_DATABASE_URL",
+          ),
+        }),
   });
 }
