@@ -376,7 +376,7 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 | BCM-CI-001 | Completed | Medium | FND-001..003, TST-001, OBS-001 | GitHub Actions frozen install, lint, typecheck, unit, build; RG-01 evidence |
 | BCM-DB-001 | Completed | High | RG-01 | PostgreSQL local/test strategy, Prisma setup, isolated test DB workflow; no SQLite |
 | BCM-DB-002 | Completed | High | DB-001 | UUID/timestamp/Decimal/naming primitives and first reviewed migration workflow |
-| BCM-DB-003 | Pending | High | DB-002 | Organization, User, Membership, Session, credential/security-table persistence foundation only |
+| BCM-DB-003 | Completed | High | DB-002 | Organization, User, Membership, Session, credential/security-table persistence foundation only |
 | BCM-DB-004 | Pending | Critical | DB-003 | Runtime/migration role grants, tenant-aware FK pattern, transaction-local RLS feasibility proof; RG-02 |
 | BCM-SEC-001 | Pending | Critical | RG-02 | Argon2id credential service, password rules, disabled-user behavior, safe unit/integration tests |
 | BCM-SEC-002 | Pending | Critical | SEC-001 | Opaque session creation/validation/revocation, token hash only, idle/absolute expiry |

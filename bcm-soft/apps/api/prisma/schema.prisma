@@ -8,3 +8,151 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model Organization {
+  id        String   @id(map: "pk_organizations") @db.Uuid
+  name      String   @db.Text
+  status    String   @db.Text
+  timezone  String   @db.Text
+  createdAt DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @map("updated_at") @db.Timestamptz(3)
+
+  invitations OrganizationInvitation[]
+  memberships OrganizationMembership[]
+
+  @@map("organizations")
+}
+
+model User {
+  id              String   @id(map: "pk_users") @db.Uuid
+  email           String   @db.Text
+  emailNormalized String   @map("email_normalized") @db.Text
+  status          String   @db.Text
+  createdAt       DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @map("updated_at") @db.Timestamptz(3)
+
+  acceptedInvitations OrganizationInvitation[] @relation("AcceptedInvitations")
+  credential          UserPasswordCredential?
+  invitationsSent     OrganizationInvitation[] @relation("InvitationsSent")
+  memberships         OrganizationMembership[]
+  passwordRecoveries  PasswordRecoveryToken[]
+  sessions            Session[]
+
+  @@unique([emailNormalized], map: "uq_users__email_normalized")
+  @@map("users")
+}
+
+model UserPasswordCredential {
+  userId            String   @id(map: "pk_user_password_credentials") @map("user_id") @db.Uuid
+  passwordHash      String   @map("password_hash") @db.Text
+  passwordChangedAt DateTime @map("password_changed_at") @db.Timestamptz(3)
+  createdAt         DateTime @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_user_password_credentials__user_id__users")
+
+  @@map("user_password_credentials")
+}
+
+model OrganizationMembership {
+  id                   String    @id(map: "pk_organization_memberships") @db.Uuid
+  organizationId       String    @map("organization_id") @db.Uuid
+  userId               String    @map("user_id") @db.Uuid
+  role                 String    @db.Text
+  status               String    @db.Text
+  authorizationVersion BigInt    @default(1) @map("authorization_version")
+  activatedAt          DateTime? @map("activated_at") @db.Timestamptz(3)
+  revokedAt            DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt            DateTime  @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime  @map("updated_at") @db.Timestamptz(3)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_organization_memberships__organization_id__organizations")
+  user         User         @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_organization_memberships__user_id__users")
+
+  @@unique([organizationId, userId], map: "uq_organization_memberships__organization_id_user_id")
+  @@index([userId, status], map: "ix_organization_memberships__user_id_status")
+  @@map("organization_memberships")
+}
+
+model Session {
+  id                                    String    @id(map: "pk_sessions") @db.Uuid
+  tokenHash                             Bytes     @map("token_hash") @db.ByteA
+  userId                                String    @map("user_id") @db.Uuid
+  currentOrganizationId                 String?   @map("current_organization_id") @db.Uuid
+  currentMembershipAuthorizationVersion BigInt?   @map("current_membership_authorization_version")
+  expiresAt                             DateTime  @map("expires_at") @db.Timestamptz(3)
+  revokedAt                             DateTime? @map("revoked_at") @db.Timestamptz(3)
+  lastSeenAt                            DateTime? @map("last_seen_at") @db.Timestamptz(3)
+  createdAt                             DateTime  @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_sessions__user_id__users")
+
+  @@unique([tokenHash], map: "uq_sessions__token_hash")
+  @@index([userId, revokedAt], map: "ix_sessions__user_id_revoked_at")
+  @@index([expiresAt], map: "ix_sessions__expires_at")
+  @@index([currentOrganizationId, userId], map: "ix_sessions__current_organization_id_user_id")
+  @@map("sessions")
+}
+
+model PasswordRecoveryToken {
+  id        String    @id(map: "pk_password_recovery_tokens") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash Bytes     @map("token_hash") @db.ByteA
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt DateTime  @map("created_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_password_recovery_tokens__user_id__users")
+
+  @@unique([tokenHash], map: "uq_password_recovery_tokens__token_hash")
+  @@index([userId, createdAt(sort: Desc)], map: "ix_password_recovery_tokens__user_id_created_at")
+  @@index([expiresAt], map: "ix_password_recovery_tokens__expires_at")
+  @@map("password_recovery_tokens")
+}
+
+model OrganizationInvitation {
+  id                      String    @id(map: "pk_organization_invitations") @db.Uuid
+  organizationId          String    @map("organization_id") @db.Uuid
+  intendedEmail           String    @map("intended_email") @db.Text
+  intendedEmailNormalized String    @map("intended_email_normalized") @db.Text
+  intendedRole            String    @map("intended_role") @db.Text
+  tokenHash               Bytes     @map("token_hash") @db.ByteA
+  invitedByUserId         String    @map("invited_by_user_id") @db.Uuid
+  acceptedByUserId        String?   @map("accepted_by_user_id") @db.Uuid
+  expiresAt               DateTime  @map("expires_at") @db.Timestamptz(3)
+  acceptedAt              DateTime? @map("accepted_at") @db.Timestamptz(3)
+  revokedAt               DateTime? @map("revoked_at") @db.Timestamptz(3)
+  createdAt               DateTime  @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime  @map("updated_at") @db.Timestamptz(3)
+
+  acceptedBy   User?        @relation("AcceptedInvitations", fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_organization_invitations__accepted_by_user_id__users")
+  invitedBy    User         @relation("InvitationsSent", fields: [invitedByUserId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_organization_invitations__invited_by_user_id__users")
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Cascade, map: "fk_organization_invitations__organization_id__organizations")
+
+  @@unique([tokenHash], map: "uq_organization_invitations__token_hash")
+  @@index([organizationId, intendedEmailNormalized, acceptedAt, revokedAt], map: "ix_organization_invitations__organization_email_lifecycle")
+  @@index([organizationId, createdAt(sort: Desc), id(sort: Desc)], map: "ix_organization_invitations__organization_created_at_id")
+  @@index([expiresAt], map: "ix_organization_invitations__expires_at")
+  @@index([invitedByUserId], map: "ix_organization_invitations__invited_by_user_id")
+  @@index([acceptedByUserId], map: "ix_organization_invitations__accepted_by_user_id")
+  @@map("organization_invitations")
+}
+
+model IdentityRateLimitWindow {
+  id                 String    @id(map: "pk_identity_rate_limit_windows") @db.Uuid
+  operation          String    @db.Text
+  dimension          String    @db.Text
+  keyFingerprint     Bytes     @map("key_fingerprint") @db.ByteA
+  fingerprintVersion Int       @map("fingerprint_version")
+  windowStartedAt    DateTime  @map("window_started_at") @db.Timestamptz(3)
+  expiresAt          DateTime  @map("expires_at") @db.Timestamptz(3)
+  blockedUntil       DateTime? @map("blocked_until") @db.Timestamptz(3)
+  attemptCount       Int       @map("attempt_count")
+  createdAt          DateTime  @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([operation, dimension, keyFingerprint, windowStartedAt], map: "uq_identity_rate_limit_windows__logical_window")
+  @@index([expiresAt], map: "ix_identity_rate_limit_windows__expires_at")
+  @@map("identity_rate_limit_windows")
+}
