@@ -192,6 +192,11 @@ describe("API observability foundation", () => {
       "set-cookie": "response-cookie",
       nested: {
         PASSWORD: "password-value",
+        passwordHash: "password-hash-value",
+        password_hash: "snake-password-hash-value",
+        currentPassword: "current-password-value",
+        newPassword: "new-password-value",
+        candidatePassword: "candidate-password-value",
         access_token: "access-value",
         RefreshToken: "refresh-value",
         apiKey: "api-key-value",
@@ -207,12 +212,37 @@ describe("API observability foundation", () => {
     expect(output).not.toContain("generic-token");
     expect(output).not.toContain("response-cookie");
     expect(output).not.toContain("password-value");
+    expect(output).not.toContain("password-hash-value");
+    expect(output).not.toContain("snake-password-hash-value");
+    expect(output).not.toContain("current-password-value");
+    expect(output).not.toContain("new-password-value");
+    expect(output).not.toContain("candidate-password-value");
     expect(output).not.toContain("access-value");
     expect(output).not.toContain("refresh-value");
     expect(output).not.toContain("api-key-value");
     expect(output).not.toContain("session-value");
     expect(output).toContain("[REDACTED]");
     expect(output).toContain("visible");
+  });
+
+  it("redacts PHC values and sanitizes errors before logging", () => {
+    const passwordHash = "$argon2id$v=19$m=19456,t=2,p=1$c2Vuc2l0aXZl$ZGlnZXN0";
+    const sensitiveError = new Error(
+      `addon failed for plaintext-secret and ${passwordHash}`,
+    );
+
+    runtime.logger.record("error", "redaction.password", {
+      diagnostic: passwordHash,
+      error: sensitiveError,
+    });
+
+    const output = chunks.join("");
+
+    expect(output).not.toContain(passwordHash);
+    expect(output).not.toContain("plaintext-secret");
+    expect(output).not.toContain("addon failed");
+    expect(output).toContain("[REDACTED]");
+    expect(output).toContain('"name":"Error"');
   });
 
   it("reports liveness without leaking configuration", async () => {

@@ -22,6 +22,10 @@ const SENSITIVE_KEYS = new Set([
   "cookie",
   "setcookie",
   "password",
+  "passwordhash",
+  "currentpassword",
+  "newpassword",
+  "candidatepassword",
   "token",
   "accesstoken",
   "refreshtoken",
@@ -35,6 +39,11 @@ const PINO_REDACTION_PATHS = [
   "cookie",
   "set-cookie",
   "password",
+  "passwordHash",
+  "password_hash",
+  "currentPassword",
+  "newPassword",
+  "candidatePassword",
   "token",
   "accessToken",
   "refreshToken",
@@ -53,7 +62,15 @@ function normalizeKey(key: string): string {
   return key.toLowerCase().replaceAll(/[-_]/g, "");
 }
 
+function containsPasswordHash(value: string): boolean {
+  return /\$argon2(?:id|i|d)\$v=\d+\$/u.test(value);
+}
+
 function sanitizeValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (typeof value === "string" && containsPasswordHash(value)) {
+    return REDACTED;
+  }
+
   if (value instanceof Error) {
     return { name: value.name };
   }
