@@ -379,7 +379,7 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 | BCM-DB-003 | Completed | High | DB-002 | Organization, User, Membership, Session, credential/security-table persistence foundation only |
 | BCM-DB-004 | Completed | Critical | DB-003 | Runtime/migration role grants, tenant-aware FK pattern, transaction-local RLS feasibility proof; RG-02 |
 | BCM-SEC-001 | Completed | Critical | RG-02 | Argon2id credential service, password rules, disabled-user behavior, safe unit/integration tests |
-| BCM-SEC-002 | Pending | Critical | SEC-001 | Opaque session creation/validation/revocation, token hash only, idle/absolute expiry |
+| BCM-SEC-002 | Completed | Critical | SEC-001 | Opaque session creation/validation/revocation, token hash only, idle/absolute expiry |
 | BCM-SEC-003 | Pending | Critical | SEC-002 | Login/logout/session endpoints, HttpOnly cookie lifecycle, safe 401 behavior, audit hooks |
 | BCM-SEC-004 | Pending | Critical | SEC-003 | CSRF, Origin/Referer, identity rate limiting, safe 401/403/error behavior, negative security tests |
 | BCM-WEB-002 | Pending | High | SEC-003, SEC-004, WEB-001 | Real login, session bootstrap, logout, 401/403 distinction, auth cache cleanup; RG-03 |
@@ -393,6 +393,7 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 
 RG-01 is **Approved** and follows BCM-CI-001.
 RG-02 is **Approved** and follows BCM-DB-004, not merely the first migration.
+RG02-F001 (runtime database identity fail-fast assertion) is **Resolved** by BCM-SEC-002 with real PostgreSQL evidence.
 RG-03 follows BCM-WEB-002 and all identity security tests.
 RG-04 follows BCM-TEN-004 and is the hard boundary before business data.
 RG-05 follows BCM-CAT-001 and may require a bounded refactor before pattern replication.

@@ -5,11 +5,21 @@ import {
 
 type RuntimeEnvironment = "development" | "test" | "production";
 
+export type SessionConfig = Readonly<{
+  idleTimeoutMilliseconds: number;
+  absoluteLifetimeMilliseconds: number;
+  touchIntervalMilliseconds: number;
+}>;
+
 export type ServerConfig = Readonly<{
   database: RuntimeDatabaseConfig;
   environment: RuntimeEnvironment;
   port: number;
+  session: SessionConfig;
 }>;
+
+const MINUTE_MILLISECONDS = 60_000;
+const HOUR_MILLISECONDS = 60 * MINUTE_MILLISECONDS;
 
 function configurationError(variableName: string, reason: string): never {
   throw new Error(`Invalid server configuration: ${variableName} ${reason}.`);
@@ -65,6 +75,81 @@ function readPort(
   return port;
 }
 
+function readBoundedInteger(
+  environment: NodeJS.ProcessEnv,
+  variableName:
+    | "SESSION_IDLE_TIMEOUT_MINUTES"
+    | "SESSION_ABSOLUTE_LIFETIME_HOURS"
+    | "SESSION_TOUCH_INTERVAL_MINUTES",
+  defaultValue: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = environment[variableName];
+  if (value === undefined || value.length === 0) return defaultValue;
+
+  if (!/^\d+$/u.test(value)) {
+    return configurationError(variableName, "must be an integer");
+  }
+
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    return configurationError(
+      variableName,
+      `must be between ${minimum} and ${maximum}`,
+    );
+  }
+
+  return parsed;
+}
+
+function loadSessionConfig(environment: NodeJS.ProcessEnv): SessionConfig {
+  const idleTimeoutMinutes = readBoundedInteger(
+    environment,
+    "SESSION_IDLE_TIMEOUT_MINUTES",
+    30,
+    1,
+    1_440,
+  );
+  const absoluteLifetimeHours = readBoundedInteger(
+    environment,
+    "SESSION_ABSOLUTE_LIFETIME_HOURS",
+    12,
+    1,
+    168,
+  );
+  const touchIntervalMinutes = readBoundedInteger(
+    environment,
+    "SESSION_TOUCH_INTERVAL_MINUTES",
+    5,
+    1,
+    30,
+  );
+  const idleTimeoutMilliseconds = idleTimeoutMinutes * MINUTE_MILLISECONDS;
+  const absoluteLifetimeMilliseconds =
+    absoluteLifetimeHours * HOUR_MILLISECONDS;
+  const touchIntervalMilliseconds = touchIntervalMinutes * MINUTE_MILLISECONDS;
+
+  if (touchIntervalMilliseconds >= idleTimeoutMilliseconds) {
+    return configurationError(
+      "SESSION_TOUCH_INTERVAL_MINUTES",
+      "must be less than SESSION_IDLE_TIMEOUT_MINUTES",
+    );
+  }
+  if (idleTimeoutMilliseconds > absoluteLifetimeMilliseconds) {
+    return configurationError(
+      "SESSION_IDLE_TIMEOUT_MINUTES",
+      "must not exceed SESSION_ABSOLUTE_LIFETIME_HOURS",
+    );
+  }
+
+  return Object.freeze({
+    idleTimeoutMilliseconds,
+    absoluteLifetimeMilliseconds,
+    touchIntervalMilliseconds,
+  });
+}
+
 export function loadServerConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerConfig {
@@ -74,5 +159,6 @@ export function loadServerConfig(
     database: loadRuntimeDatabaseConfig(environment),
     environment: runtimeEnvironment,
     port: readPort(environment, runtimeEnvironment),
+    session: loadSessionConfig(environment),
   });
 }

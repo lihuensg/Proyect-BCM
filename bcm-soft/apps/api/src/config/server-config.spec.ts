@@ -22,9 +22,15 @@ describe("loadServerConfig", () => {
       database: { runtimeUrl: RUNTIME_DATABASE_URL },
       environment: "production",
       port: 3000,
+      session: {
+        idleTimeoutMilliseconds: 1_800_000,
+        absoluteLifetimeMilliseconds: 43_200_000,
+        touchIntervalMilliseconds: 300_000,
+      },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.database)).toBe(true);
+    expect(Object.isFrozen(config.session)).toBe(true);
   });
 
   it("rejects a missing required runtime environment", () => {
@@ -71,6 +77,11 @@ describe("loadServerConfig", () => {
       database: { runtimeUrl: RUNTIME_DATABASE_URL },
       environment: "test",
       port: 0,
+      session: {
+        idleTimeoutMilliseconds: 1_800_000,
+        absoluteLifetimeMilliseconds: 43_200_000,
+        touchIntervalMilliseconds: 300_000,
+      },
     });
 
     expect(() =>
@@ -144,6 +155,65 @@ describe("loadServerConfig", () => {
   it("rejects a missing direct migration database URL", () => {
     expect(() => loadMigrationDatabaseConfig({})).toThrow(
       "Invalid server configuration: DIRECT_DATABASE_URL is required.",
+    );
+  });
+
+  it("accepts bounded session policy overrides", () => {
+    const config = loadServerConfig({
+      DATABASE_URL: RUNTIME_DATABASE_URL,
+      NODE_ENV: "test",
+      SESSION_IDLE_TIMEOUT_MINUTES: "60",
+      SESSION_ABSOLUTE_LIFETIME_HOURS: "24",
+      SESSION_TOUCH_INTERVAL_MINUTES: "10",
+    });
+
+    expect(config.session).toEqual({
+      idleTimeoutMilliseconds: 3_600_000,
+      absoluteLifetimeMilliseconds: 86_400_000,
+      touchIntervalMilliseconds: 600_000,
+    });
+  });
+
+  it.each([
+    ["SESSION_IDLE_TIMEOUT_MINUTES", "0"],
+    ["SESSION_IDLE_TIMEOUT_MINUTES", "1441"],
+    ["SESSION_ABSOLUTE_LIFETIME_HOURS", "0"],
+    ["SESSION_ABSOLUTE_LIFETIME_HOURS", "169"],
+    ["SESSION_TOUCH_INTERVAL_MINUTES", "0"],
+    ["SESSION_TOUCH_INTERVAL_MINUTES", "31"],
+    ["SESSION_TOUCH_INTERVAL_MINUTES", "NaN"],
+    ["SESSION_TOUCH_INTERVAL_MINUTES", "-1"],
+  ])("rejects an invalid %s value", (variableName, value) => {
+    expect(() =>
+      loadServerConfig({
+        DATABASE_URL: RUNTIME_DATABASE_URL,
+        NODE_ENV: "test",
+        [variableName]: value,
+      }),
+    ).toThrow(`Invalid server configuration: ${variableName}`);
+  });
+
+  it("requires touch to be shorter than idle and idle not to exceed absolute", () => {
+    expect(() =>
+      loadServerConfig({
+        DATABASE_URL: RUNTIME_DATABASE_URL,
+        NODE_ENV: "test",
+        SESSION_IDLE_TIMEOUT_MINUTES: "5",
+        SESSION_TOUCH_INTERVAL_MINUTES: "5",
+      }),
+    ).toThrow(
+      "Invalid server configuration: SESSION_TOUCH_INTERVAL_MINUTES must be less than SESSION_IDLE_TIMEOUT_MINUTES.",
+    );
+
+    expect(() =>
+      loadServerConfig({
+        DATABASE_URL: RUNTIME_DATABASE_URL,
+        NODE_ENV: "test",
+        SESSION_IDLE_TIMEOUT_MINUTES: "121",
+        SESSION_ABSOLUTE_LIFETIME_HOURS: "2",
+      }),
+    ).toThrow(
+      "Invalid server configuration: SESSION_IDLE_TIMEOUT_MINUTES must not exceed SESSION_ABSOLUTE_LIFETIME_HOURS.",
     );
   });
 });

@@ -360,6 +360,12 @@ async function main(): Promise<void> {
       {
         ...environment,
         BCM_RUNTIME_CAPABILITY_ROLE: "bcm_soft_runtime",
+        BCM_TEST_ADMIN_DATABASE_URL: buildDatabaseUrl(
+          port,
+          databaseName,
+          adminRole,
+          adminPassword,
+        ),
         BCM_TEST_ADMIN_ROLE: adminRole,
         BCM_TEST_MIGRATION_ROLE: migrationRole,
         BCM_TEST_RUNTIME_ROLE: runtimeRole,

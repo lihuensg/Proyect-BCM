@@ -59,6 +59,11 @@ describe("API observability foundation", () => {
     }),
     environment: "test",
     port: 0,
+    session: Object.freeze({
+      idleTimeoutMilliseconds: 1_800_000,
+      absoluteLifetimeMilliseconds: 43_200_000,
+      touchIntervalMilliseconds: 300_000,
+    }),
   });
   const runtime = createObservability(config, {
     destination,
@@ -199,6 +204,11 @@ describe("API observability foundation", () => {
         candidatePassword: "candidate-password-value",
         access_token: "access-value",
         RefreshToken: "refresh-value",
+        sessionToken: "raw-session-value",
+        session_token: "snake-session-value",
+        tokenHash: "token-hash-value",
+        token_hash: "snake-token-hash-value",
+        sessionTokenHash: "session-token-hash-value",
         apiKey: "api-key-value",
         session: "session-value",
         harmless: "visible",
@@ -219,6 +229,11 @@ describe("API observability foundation", () => {
     expect(output).not.toContain("candidate-password-value");
     expect(output).not.toContain("access-value");
     expect(output).not.toContain("refresh-value");
+    expect(output).not.toContain("raw-session-value");
+    expect(output).not.toContain("snake-session-value");
+    expect(output).not.toContain("token-hash-value");
+    expect(output).not.toContain("snake-token-hash-value");
+    expect(output).not.toContain("session-token-hash-value");
     expect(output).not.toContain("api-key-value");
     expect(output).not.toContain("session-value");
     expect(output).toContain("[REDACTED]");
