@@ -23,6 +23,16 @@ import { PrismaSessionRepository } from "./infrastructure/prisma-session-reposit
 import { SystemClock } from "./infrastructure/system-clock.js";
 import { AuthController } from "./presentation/auth.controller.js";
 import { SessionCookieCodec } from "./presentation/session-cookie-codec.js";
+import { NodeCsrfTokenService } from "./infrastructure/node-csrf-token-service.js";
+import { NodeRateLimitFingerprint } from "./infrastructure/node-rate-limit-fingerprint.js";
+import { PrismaLoginRateLimitStore } from "./infrastructure/prisma-login-rate-limit-store.js";
+import { PersistentLoginRateLimiter } from "./application/persistent-login-rate-limiter.js";
+import { LocalNetworkRateLimiter } from "./application/local-network-rate-limiter.js";
+import type {
+  LoginRateLimiter,
+  LoginRateLimitStore,
+} from "./application/login-rate-limiter.js";
+import { TrustedOriginValidator } from "./presentation/trusted-origin-validator.js";
 
 const CLOCK = Symbol("Clock");
 const CREDENTIAL_REPOSITORY = Symbol("CredentialRepository");
@@ -30,6 +40,8 @@ const IDENTITY_AUDIT = Symbol("IdentityAudit");
 const PASSWORD_HASHER = Symbol("PasswordHasher");
 const SESSION_REPOSITORY = Symbol("SessionRepository");
 const SESSION_TOKEN_SERVICE = Symbol("SessionTokenService");
+const LOGIN_RATE_LIMITER = Symbol("LoginRateLimiter");
+const LOGIN_RATE_LIMIT_STORE = Symbol("LoginRateLimitStore");
 
 @Module({})
 export class IdentityModule {
@@ -68,6 +80,55 @@ export class IdentityModule {
         useFactory: (): IdentityAudit => new PinoIdentityAudit(logger),
       },
       {
+        provide: PinoIdentityAudit,
+        useExisting: IDENTITY_AUDIT,
+      },
+      {
+        provide: NodeCsrfTokenService,
+        useFactory: () => new NodeCsrfTokenService(config.security.csrfHmacKey),
+      },
+      {
+        provide: NodeRateLimitFingerprint,
+        useFactory: () =>
+          new NodeRateLimitFingerprint(config.security.rateLimitHmacKey),
+      },
+      {
+        provide: TrustedOriginValidator,
+        useFactory: () =>
+          new TrustedOriginValidator(config.security.trustedOrigins),
+      },
+      {
+        provide: LOGIN_RATE_LIMIT_STORE,
+        inject: [PrismaClientLifecycle],
+        useFactory: (lifecycle: PrismaClientLifecycle): LoginRateLimitStore =>
+          new PrismaLoginRateLimitStore(lifecycle.client),
+      },
+      {
+        provide: LOGIN_RATE_LIMITER,
+        inject: [LOGIN_RATE_LIMIT_STORE, NodeRateLimitFingerprint, CLOCK],
+        useFactory: (
+          store: LoginRateLimitStore,
+          fingerprints: NodeRateLimitFingerprint,
+          clock: Clock,
+        ): LoginRateLimiter =>
+          new PersistentLoginRateLimiter(
+            store,
+            fingerprints,
+            clock,
+            config.security.loginRateLimits,
+          ),
+      },
+      {
+        provide: LocalNetworkRateLimiter,
+        inject: [NodeRateLimitFingerprint, CLOCK],
+        useFactory: (fingerprints: NodeRateLimitFingerprint, clock: Clock) =>
+          new LocalNetworkRateLimiter(
+            fingerprints,
+            clock,
+            config.security.loginRateLimits.network,
+          ),
+      },
+      {
         provide: CredentialAuthenticator,
         inject: [PASSWORD_HASHER],
         useFactory: (passwordHasher: PasswordHasher) =>
@@ -98,6 +159,7 @@ export class IdentityModule {
           SessionService,
           CLOCK,
           IDENTITY_AUDIT,
+          LOGIN_RATE_LIMITER,
         ],
         useFactory: (
           credentials: CredentialRepository,
@@ -106,6 +168,7 @@ export class IdentityModule {
           sessions: SessionService,
           clock: Clock,
           audit: IdentityAudit,
+          rateLimiter: LoginRateLimiter,
         ) =>
           new LoginUseCase(
             credentials,
@@ -114,6 +177,7 @@ export class IdentityModule {
             sessions,
             clock,
             audit,
+            rateLimiter,
           ),
       },
       {
@@ -124,9 +188,11 @@ export class IdentityModule {
       },
       {
         provide: SessionBootstrapUseCase,
-        inject: [SessionService],
-        useFactory: (sessions: SessionService) =>
-          new SessionBootstrapUseCase(sessions),
+        inject: [SessionService, NodeCsrfTokenService],
+        useFactory: (
+          sessions: SessionService,
+          csrfTokens: NodeCsrfTokenService,
+        ) => new SessionBootstrapUseCase(sessions, csrfTokens),
       },
       {
         provide: SessionCookieCodec,

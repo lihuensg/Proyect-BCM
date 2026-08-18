@@ -381,7 +381,7 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 | BCM-SEC-001 | Completed | Critical | RG-02 | Argon2id credential service, password rules, disabled-user behavior, safe unit/integration tests |
 | BCM-SEC-002 | Completed | Critical | SEC-001 | Opaque session creation/validation/revocation, token hash only, idle/absolute expiry |
 | BCM-SEC-003 | Completed | Critical | SEC-002 | Login/logout/session endpoints, HttpOnly cookie lifecycle, safe 401 behavior, audit hooks |
-| BCM-SEC-004 | Pending | Critical | SEC-003 | CSRF, Origin/Referer, identity rate limiting, safe 401/403/error behavior, negative security tests |
+| BCM-SEC-004 | Completed | Critical | SEC-003 | CSRF, Origin/Referer, identity rate limiting, safe 401/403/error behavior, negative security tests |
 | BCM-WEB-002 | Pending | High | SEC-003, SEC-004, WEB-001 | Real login, session bootstrap, logout, 401/403 distinction, auth cache cleanup; RG-03 |
 | BCM-TEN-001 | Pending | Critical | RG-03, DB-004 | Resolve Organization from session and active Membership; fail closed and repository context contract |
 | BCM-TEN-002 | Pending | Critical | TEN-001 | Central role-to-permission map, authorization version, semantic guards, deny-default tests |

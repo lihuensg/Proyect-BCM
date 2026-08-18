@@ -25,6 +25,24 @@ export type ServerConfig = Readonly<{
   port: number;
   session: SessionConfig;
   sessionCookie: SessionCookieConfig;
+  security: SecurityConfig;
+}>;
+
+export type RateLimitRuleConfig = Readonly<{
+  maximumAttempts: number;
+  windowMilliseconds: number;
+  blockMilliseconds: number;
+}>;
+
+export type SecurityConfig = Readonly<{
+  trustedOrigins: readonly string[];
+  csrfHmacKey: Buffer;
+  rateLimitHmacKey: Buffer;
+  loginRateLimits: Readonly<{
+    network: RateLimitRuleConfig;
+    identity: RateLimitRuleConfig;
+    identityNetwork: RateLimitRuleConfig;
+  }>;
 }>;
 
 const MINUTE_MILLISECONDS = 60_000;
@@ -173,6 +191,90 @@ function loadSessionCookieConfig(
   });
 }
 
+function readHmacKey(
+  environment: NodeJS.ProcessEnv,
+  variableName: "CSRF_HMAC_KEY" | "RATE_LIMIT_HMAC_KEY",
+): Buffer {
+  const value = environment[variableName];
+  if (value === undefined || value.length === 0) {
+    return configurationError(variableName, "is required");
+  }
+  if (!/^[A-Za-z0-9_-]+$/u.test(value)) {
+    return configurationError(variableName, "must be base64url encoded");
+  }
+  const decoded = Buffer.from(value, "base64url");
+  if (decoded.length < 32 || decoded.toString("base64url") !== value) {
+    return configurationError(
+      variableName,
+      "must decode to at least 32 bytes using canonical base64url",
+    );
+  }
+  return decoded;
+}
+
+function readTrustedOrigins(environment: NodeJS.ProcessEnv): readonly string[] {
+  const value = environment.TRUSTED_ORIGINS;
+  if (value === undefined || value.length === 0) {
+    return configurationError("TRUSTED_ORIGINS", "is required");
+  }
+
+  const origins = value.split(",").map((entry) => entry.trim());
+  if (origins.some((origin) => origin.length === 0)) {
+    return configurationError("TRUSTED_ORIGINS", "contains an empty origin");
+  }
+
+  const canonical = origins.map((origin) => {
+    let url: URL;
+    try {
+      url = new URL(origin);
+    } catch {
+      return configurationError("TRUSTED_ORIGINS", "contains an invalid URL");
+    }
+    if (
+      (url.protocol !== "http:" && url.protocol !== "https:") ||
+      url.origin !== origin ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
+      url.pathname !== "/" ||
+      url.search.length > 0 ||
+      url.hash.length > 0
+    ) {
+      return configurationError(
+        "TRUSTED_ORIGINS",
+        "must contain canonical HTTP(S) origins only",
+      );
+    }
+    return url.origin;
+  });
+
+  return Object.freeze([...new Set(canonical)]);
+}
+
+function rateRule(
+  maximumAttempts: number,
+  windowMinutes: number,
+  blockMinutes: number,
+): RateLimitRuleConfig {
+  return Object.freeze({
+    maximumAttempts,
+    windowMilliseconds: windowMinutes * MINUTE_MILLISECONDS,
+    blockMilliseconds: blockMinutes * MINUTE_MILLISECONDS,
+  });
+}
+
+function loadSecurityConfig(environment: NodeJS.ProcessEnv): SecurityConfig {
+  return Object.freeze({
+    trustedOrigins: readTrustedOrigins(environment),
+    csrfHmacKey: readHmacKey(environment, "CSRF_HMAC_KEY"),
+    rateLimitHmacKey: readHmacKey(environment, "RATE_LIMIT_HMAC_KEY"),
+    loginRateLimits: Object.freeze({
+      network: rateRule(30, 10, 10),
+      identity: rateRule(10, 15, 15),
+      identityNetwork: rateRule(5, 10, 10),
+    }),
+  });
+}
+
 export function loadServerConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerConfig {
@@ -184,5 +286,6 @@ export function loadServerConfig(
     port: readPort(environment, runtimeEnvironment),
     session: loadSessionConfig(environment),
     sessionCookie: loadSessionCookieConfig(runtimeEnvironment),
+    security: loadSecurityConfig(environment),
   });
 }

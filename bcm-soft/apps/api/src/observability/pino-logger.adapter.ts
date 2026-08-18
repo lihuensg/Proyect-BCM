@@ -33,6 +33,7 @@ const SENSITIVE_KEYS = new Set([
   "tokenhash",
   "sessiontokenhash",
   "session",
+  "csrftoken",
   "secret",
   "apikey",
 ]);
@@ -56,6 +57,10 @@ const PINO_REDACTION_PATHS = [
   "token_hash",
   "sessionTokenHash",
   "session",
+  "csrfToken",
+  "x-csrf-token",
+  "headers.x-csrf-token",
+  "req.headers.x-csrf-token",
   "secret",
   "apiKey",
   "headers.authorization",

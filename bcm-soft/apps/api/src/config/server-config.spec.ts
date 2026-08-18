@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { loadMigrationDatabaseConfig } from "./database-config.js";
-import { loadServerConfig } from "./server-config.js";
+import { loadServerConfig as loadServerConfigFromEnvironment } from "./server-config.js";
 
 const RUNTIME_DATABASE_URL =
   "postgresql://runtime-user:runtime-password@database.internal:5432/bcm_soft";
@@ -9,6 +9,20 @@ const MIGRATION_DATABASE_URL =
   "postgresql://migration-user:migration-password@database.internal:5432/bcm_soft";
 const SHADOW_DATABASE_URL =
   "postgresql://migration-user:migration-password@database.internal:5432/bcm_soft_shadow";
+const CSRF_HMAC_KEY = Buffer.alloc(32, 1).toString("base64url");
+const RATE_LIMIT_HMAC_KEY = Buffer.alloc(32, 2).toString("base64url");
+const SECURITY_ENVIRONMENT = {
+  TRUSTED_ORIGINS: "https://app.bcm.test",
+  CSRF_HMAC_KEY,
+  RATE_LIMIT_HMAC_KEY,
+} as const;
+
+function loadServerConfig(environment: NodeJS.ProcessEnv) {
+  return loadServerConfigFromEnvironment({
+    ...SECURITY_ENVIRONMENT,
+    ...environment,
+  });
+}
 
 describe("loadServerConfig", () => {
   it("returns typed immutable configuration for valid server values", () => {
@@ -33,6 +47,28 @@ describe("loadServerConfig", () => {
         secure: true,
         sameSite: "Lax",
         path: "/",
+      },
+      security: {
+        trustedOrigins: ["https://app.bcm.test"],
+        csrfHmacKey: Buffer.alloc(32, 1),
+        rateLimitHmacKey: Buffer.alloc(32, 2),
+        loginRateLimits: {
+          network: {
+            maximumAttempts: 30,
+            windowMilliseconds: 600_000,
+            blockMilliseconds: 600_000,
+          },
+          identity: {
+            maximumAttempts: 10,
+            windowMilliseconds: 900_000,
+            blockMilliseconds: 900_000,
+          },
+          identityNetwork: {
+            maximumAttempts: 5,
+            windowMilliseconds: 600_000,
+            blockMilliseconds: 600_000,
+          },
+        },
       },
     });
     expect(Object.isFrozen(config)).toBe(true);
@@ -97,6 +133,28 @@ describe("loadServerConfig", () => {
         sameSite: "Lax",
         path: "/",
       },
+      security: {
+        trustedOrigins: ["https://app.bcm.test"],
+        csrfHmacKey: Buffer.alloc(32, 1),
+        rateLimitHmacKey: Buffer.alloc(32, 2),
+        loginRateLimits: {
+          network: {
+            maximumAttempts: 30,
+            windowMilliseconds: 600_000,
+            blockMilliseconds: 600_000,
+          },
+          identity: {
+            maximumAttempts: 10,
+            windowMilliseconds: 900_000,
+            blockMilliseconds: 900_000,
+          },
+          identityNetwork: {
+            maximumAttempts: 5,
+            windowMilliseconds: 600_000,
+            blockMilliseconds: 600_000,
+          },
+        },
+      },
     });
 
     expect(() =>
@@ -111,6 +169,52 @@ describe("loadServerConfig", () => {
     expect(() =>
       loadServerConfig({ NODE_ENV: "production", PORT: "3000" }),
     ).toThrow("Invalid server configuration: DATABASE_URL is required.");
+  });
+
+  it("fails closed for missing or weak security configuration", () => {
+    expect(() =>
+      loadServerConfigFromEnvironment({
+        DATABASE_URL: RUNTIME_DATABASE_URL,
+        NODE_ENV: "production",
+        PORT: "3000",
+      }),
+    ).toThrow("Invalid server configuration: TRUSTED_ORIGINS is required.");
+    expect(() =>
+      loadServerConfigFromEnvironment({
+        ...SECURITY_ENVIRONMENT,
+        CSRF_HMAC_KEY: Buffer.alloc(31).toString("base64url"),
+        DATABASE_URL: RUNTIME_DATABASE_URL,
+        NODE_ENV: "production",
+        PORT: "3000",
+      }),
+    ).toThrow("Invalid server configuration: CSRF_HMAC_KEY");
+  });
+
+  it("accepts only canonical trusted origins and deduplicates exact entries", () => {
+    expect(
+      loadServerConfig({
+        DATABASE_URL: RUNTIME_DATABASE_URL,
+        NODE_ENV: "test",
+        TRUSTED_ORIGINS:
+          "https://app.bcm.test,http://localhost:5173,https://app.bcm.test",
+      }).security.trustedOrigins,
+    ).toEqual(["https://app.bcm.test", "http://localhost:5173"]);
+
+    for (const trustedOrigins of [
+      "https://app.bcm.test/route",
+      "https://app.bcm.test?query=1",
+      "https://user@app.bcm.test",
+      "https://app.bcm.test,",
+      "*",
+    ]) {
+      expect(() =>
+        loadServerConfig({
+          DATABASE_URL: RUNTIME_DATABASE_URL,
+          NODE_ENV: "test",
+          TRUSTED_ORIGINS: trustedOrigins,
+        }),
+      ).toThrow("Invalid server configuration: TRUSTED_ORIGINS");
+    }
   });
 
   it("rejects an invalid database URL without exposing credentials", () => {

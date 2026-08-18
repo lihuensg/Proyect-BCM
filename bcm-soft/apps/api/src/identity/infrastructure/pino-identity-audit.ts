@@ -28,4 +28,29 @@ export class PinoIdentityAudit implements IdentityAudit {
       auditDurability: "diagnostic-only",
     });
   }
+
+  recordOriginRejected(operation: "login" | "logout"): void {
+    this.logger.record("warn", "identity.origin.rejected", {
+      operation,
+      outcome: "rejected",
+      auditDurability: "diagnostic-only",
+    });
+  }
+
+  recordCsrfRejected(operation: "logout"): void {
+    this.logger.record("warn", "identity.csrf.rejected", {
+      operation,
+      outcome: "rejected",
+      auditDurability: "diagnostic-only",
+    });
+  }
+
+  recordLoginRateLimited(retryAfterSeconds: number): void {
+    this.logger.record("warn", "identity.login.rate_limited", {
+      operation: "login",
+      outcome: "rate-limited",
+      retryAfterSeconds,
+      auditDurability: "diagnostic-only",
+    });
+  }
 }

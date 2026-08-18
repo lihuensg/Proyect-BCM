@@ -128,6 +128,9 @@ function migrationEnvironment(
     PORT: "0",
     SHADOW_DATABASE_URL: shadowDatabaseUrl,
     TEST_DATABASE_URL: runtimeUrl,
+    TRUSTED_ORIGINS: "https://app.bcm.test",
+    CSRF_HMAC_KEY: randomBytes(32).toString("base64url"),
+    RATE_LIMIT_HMAC_KEY: randomBytes(32).toString("base64url"),
   };
 }
 

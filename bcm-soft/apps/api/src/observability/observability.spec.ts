@@ -71,6 +71,28 @@ describe("API observability foundation", () => {
       sameSite: "Lax",
       path: "/",
     }),
+    security: Object.freeze({
+      trustedOrigins: Object.freeze(["https://app.bcm.test"]),
+      csrfHmacKey: Buffer.alloc(32, 1),
+      rateLimitHmacKey: Buffer.alloc(32, 2),
+      loginRateLimits: Object.freeze({
+        network: Object.freeze({
+          maximumAttempts: 30,
+          windowMilliseconds: 600_000,
+          blockMilliseconds: 600_000,
+        }),
+        identity: Object.freeze({
+          maximumAttempts: 10,
+          windowMilliseconds: 900_000,
+          blockMilliseconds: 900_000,
+        }),
+        identityNetwork: Object.freeze({
+          maximumAttempts: 5,
+          windowMilliseconds: 600_000,
+          blockMilliseconds: 600_000,
+        }),
+      }),
+    }),
   });
   const runtime = createObservability(config, {
     destination,

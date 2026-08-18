@@ -4,10 +4,12 @@ import type { CredentialRepository } from "./credential-repository.js";
 import { normalizeIdentityEmail } from "./email-address.js";
 import type { IdentityAudit } from "./identity-audit.js";
 import type { PasswordHasher } from "./password-hasher.js";
+import type { LoginRateLimiter } from "./login-rate-limiter.js";
 import type { CreatedSession, SessionService } from "./session-service.js";
 
 export type LoginResult =
   | Readonly<{ status: "invalid" }>
+  | Readonly<{ status: "rate-limited"; retryAfterSeconds: number }>
   | Readonly<{ status: "authenticated"; session: CreatedSession }>;
 
 const INVALID_RESULT: LoginResult = Object.freeze({ status: "invalid" });
@@ -20,12 +22,24 @@ export class LoginUseCase {
     private readonly sessions: Pick<SessionService, "createSession">,
     private readonly clock: Clock,
     private readonly audit: IdentityAudit,
+    private readonly rateLimiter: LoginRateLimiter,
   ) {}
 
   async execute(
-    input: Readonly<{ email: unknown; password: string }>,
+    input: Readonly<{ email: unknown; password: string; clientIp: string }>,
   ): Promise<LoginResult> {
     const normalizedEmail = normalizeIdentityEmail(input.email);
+    const rateLimit = await this.rateLimiter.consume({
+      normalizedEmail,
+      clientIp: input.clientIp,
+    });
+    if (!rateLimit.allowed) {
+      this.audit.recordLoginRateLimited(rateLimit.retryAfterSeconds);
+      return Object.freeze({
+        status: "rate-limited",
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      });
+    }
     const identity =
       await this.credentials.findPasswordIdentityByNormalizedEmail(
         normalizedEmail,

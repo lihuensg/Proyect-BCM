@@ -4,6 +4,7 @@ import { NestFactory } from "@nestjs/core";
 
 import { AppModule } from "./app.module.js";
 import { loadServerConfig } from "./config/server-config.js";
+import { configureCors } from "./config/cors.js";
 import {
   configureObservability,
   createObservability,
@@ -20,6 +21,7 @@ async function bootstrap(): Promise<void> {
   );
 
   app.setGlobalPrefix("api");
+  configureCors(app, config);
   configureObservability(app, observability);
 
   await app.listen(config.port);

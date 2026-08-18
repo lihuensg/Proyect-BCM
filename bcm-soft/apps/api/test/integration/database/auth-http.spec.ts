@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { AppModule } from "../../../src/app.module.js";
 import { loadServerConfig } from "../../../src/config/server-config.js";
+import { configureCors } from "../../../src/config/cors.js";
 import { CredentialAuthenticator } from "../../../src/identity/application/credential-authenticator.js";
 import type { CredentialRepository } from "../../../src/identity/application/credential-repository.js";
 import type { IdentityAudit } from "../../../src/identity/application/identity-audit.js";
@@ -19,6 +20,9 @@ import { PrismaSessionRepository } from "../../../src/identity/infrastructure/pr
 import { NodeSessionTokenService } from "../../../src/identity/infrastructure/node-session-token-service.js";
 import { SystemClock } from "../../../src/identity/infrastructure/system-clock.js";
 import { SessionService } from "../../../src/identity/application/session-service.js";
+import { NodeRateLimitFingerprint } from "../../../src/identity/infrastructure/node-rate-limit-fingerprint.js";
+import { PrismaLoginRateLimitStore } from "../../../src/identity/infrastructure/prisma-login-rate-limit-store.js";
+import { PersistentLoginRateLimiter } from "../../../src/identity/application/persistent-login-rate-limiter.js";
 import { PrismaClientLifecycle } from "../../../src/infrastructure/database/prisma-client-lifecycle.js";
 import { generateUuidV7 } from "../../../src/infrastructure/identifiers/uuid-v7.js";
 import {
@@ -110,11 +114,26 @@ describe("Identity HTTP with PostgreSQL", () => {
       body?: unknown;
       cookie?: string;
       method?: "GET" | "POST";
+      csrfToken?: string;
+      origin?: string | null;
+      referer?: string;
+      forwardedFor?: string;
+      forwarded?: string;
+      realIp?: string;
     }> = {},
   ): Promise<Response> {
     const headers: Record<string, string> = {};
+    if (input.origin !== null)
+      headers.origin = input.origin ?? "https://app.bcm.test";
     if (input.body !== undefined) headers["content-type"] = "application/json";
     if (input.cookie !== undefined) headers.cookie = input.cookie;
+    if (input.csrfToken !== undefined)
+      headers["x-csrf-token"] = input.csrfToken;
+    if (input.referer !== undefined) headers.referer = input.referer;
+    if (input.forwardedFor !== undefined)
+      headers["x-forwarded-for"] = input.forwardedFor;
+    if (input.forwarded !== undefined) headers.forwarded = input.forwarded;
+    if (input.realIp !== undefined) headers["x-real-ip"] = input.realIp;
 
     return fetch(`${baseUrl}${path}`, {
       method: input.method ?? "GET",
@@ -138,6 +157,7 @@ describe("Identity HTTP with PostgreSQL", () => {
       { logger: observability.logger },
     );
     app.setGlobalPrefix("api");
+    configureCors(app, config);
     configureObservability(app, observability);
     await app.listen(0, "127.0.0.1");
     baseUrl = await app.getUrl();
@@ -265,6 +285,64 @@ describe("Identity HTTP with PostgreSQL", () => {
     });
   });
 
+  it("fails closed for missing or untrusted login provenance and permits trusted Referer fallback", async () => {
+    const identity = await createIdentity();
+    for (const origin of [null, "https://app.bcm.test.evil"]) {
+      const response = await request("/api/auth/login", {
+        method: "POST",
+        origin,
+        body: { email: identity.email, password: PASSWORD },
+      });
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({
+        code: "ORIGIN_VALIDATION_FAILED",
+      });
+    }
+    expect(
+      (
+        await request("/api/auth/login", {
+          method: "POST",
+          origin: null,
+          referer: "https://app.bcm.test/login",
+          body: { email: identity.email, password: PASSWORD },
+        })
+      ).status,
+    ).toBe(204);
+  });
+
+  it("emits credentialed CORS headers only for an exact trusted origin", async () => {
+    const trusted = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://app.bcm.test",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "x-csrf-token,content-type",
+      },
+    });
+    expect(trusted.status).toBe(204);
+    expect(trusted.headers.get("access-control-allow-origin")).toBe(
+      "https://app.bcm.test",
+    );
+    expect(trusted.headers.get("access-control-allow-credentials")).toBe(
+      "true",
+    );
+    expect(
+      trusted.headers.get("access-control-allow-headers")?.toLowerCase(),
+    ).toContain("x-csrf-token");
+
+    const untrusted = await fetch(`${baseUrl}/api/auth/logout`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://app.bcm.test.evil",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(untrusted.headers.get("access-control-allow-origin")).toBeNull();
+    expect(
+      untrusted.headers.get("access-control-allow-credentials"),
+    ).toBeNull();
+  });
+
   it("bootstraps only a valid active session and omits authority internals", async () => {
     const identity = await createIdentity();
     const loginResponse = await login(identity.email);
@@ -274,12 +352,19 @@ describe("Identity HTTP with PostgreSQL", () => {
 
     const valid = await request("/api/auth/session", { cookie });
     expect(valid.status).toBe(200);
-    await expect(valid.json()).resolves.toEqual({
+    const bootstrap = (await valid.json()) as {
+      authenticated: boolean;
+      user: { id: string };
+      csrfToken: string;
+    };
+    expect(bootstrap).toMatchObject({
       authenticated: true,
       user: { id: identity.userId },
     });
+    expect(bootstrap.csrfToken).toMatch(/^v1\.[A-Za-z0-9_-]{43}$/u);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(chunks.join("")).not.toContain(cookie);
+    expect(chunks.join("")).not.toContain(bootstrap.csrfToken);
 
     for (const invalidCookie of [
       undefined,
@@ -347,8 +432,19 @@ describe("Identity HTTP with PostgreSQL", () => {
     if (issued === null) throw new Error("Login cookie was not issued.");
     const cookie = cookiePair(issued);
 
-    for (const suppliedCookie of [
+    const bootstrapResponse = await request("/api/auth/session", { cookie });
+    const { csrfToken } = (await bootstrapResponse.json()) as {
+      csrfToken: string;
+    };
+
+    const firstLogout = await request("/api/auth/logout", {
+      method: "POST",
       cookie,
+      csrfToken,
+    });
+    expect(firstLogout.status).toBe(204);
+
+    for (const suppliedCookie of [
       cookie,
       undefined,
       "__Host-bcm_session=malformed",
@@ -375,6 +471,105 @@ describe("Identity HTTP with PostgreSQL", () => {
       [identity.userId],
     );
     expect(session.rows[0]?.revoked_at).toBeInstanceOf(Date);
+  });
+
+  it("does not revoke or clear a valid session when CSRF validation fails", async () => {
+    const identity = await createIdentity();
+    const loginResponse = await login(identity.email);
+    const issued = loginResponse.headers.get("set-cookie");
+    if (issued === null) throw new Error("Login cookie was not issued.");
+    const cookie = cookiePair(issued);
+    const bootstrapResponse = await request("/api/auth/session", { cookie });
+    const { csrfToken } = (await bootstrapResponse.json()) as {
+      csrfToken: string;
+    };
+
+    const rejected = await request("/api/auth/logout", {
+      method: "POST",
+      cookie,
+      csrfToken: `v1.${"A".repeat(43)}`,
+    });
+    expect(rejected.status).toBe(403);
+    expect(rejected.headers.get("set-cookie")).toBeNull();
+    await expect(rejected.json()).resolves.toMatchObject({
+      code: "CSRF_VALIDATION_FAILED",
+    });
+    expect((await request("/api/auth/session", { cookie })).status).toBe(200);
+
+    expect(
+      (await request("/api/auth/logout", { method: "POST", cookie, csrfToken }))
+        .status,
+    ).toBe(204);
+  });
+
+  it("binds CSRF to one session and keeps rejected mutations effect-free", async () => {
+    const identity = await createIdentity();
+    const firstLogin = await login(identity.email);
+    const firstSetCookie = firstLogin.headers.get("set-cookie");
+    if (firstSetCookie === null)
+      throw new Error("First login cookie was not issued.");
+    const firstCookie = cookiePair(firstSetCookie);
+    const firstBootstrap = (await (
+      await request("/api/auth/session", { cookie: firstCookie })
+    ).json()) as { csrfToken: string };
+
+    const secondLogin = await login(identity.email);
+    const secondSetCookie = secondLogin.headers.get("set-cookie");
+    if (secondSetCookie === null)
+      throw new Error("Second login cookie was not issued.");
+    const secondCookie = cookiePair(secondSetCookie);
+    const secondBootstrap = (await (
+      await request("/api/auth/session", { cookie: secondCookie })
+    ).json()) as { csrfToken: string };
+    expect(secondBootstrap.csrfToken).not.toBe(firstBootstrap.csrfToken);
+
+    for (const csrfToken of [
+      undefined,
+      "malformed",
+      firstBootstrap.csrfToken,
+    ]) {
+      const rejected = await request("/api/auth/logout", {
+        method: "POST",
+        cookie: secondCookie,
+        ...(csrfToken === undefined ? {} : { csrfToken }),
+      });
+      expect(rejected.status).toBe(403);
+      expect(rejected.headers.get("set-cookie")).toBeNull();
+      expect(
+        (await request("/api/auth/session", { cookie: secondCookie })).status,
+      ).toBe(200);
+    }
+
+    const crossOrigin = await request("/api/auth/logout", {
+      method: "POST",
+      cookie: secondCookie,
+      csrfToken: secondBootstrap.csrfToken,
+      origin: "https://evil.test",
+    });
+    expect(crossOrigin.status).toBe(403);
+    expect(crossOrigin.headers.get("set-cookie")).toBeNull();
+    expect(
+      (await request("/api/auth/session", { cookie: secondCookie })).status,
+    ).toBe(200);
+
+    expect(
+      (
+        await request("/api/auth/logout", {
+          method: "POST",
+          cookie: secondCookie,
+          csrfToken: secondBootstrap.csrfToken,
+        })
+      ).status,
+    ).toBe(204);
+    expect(
+      (
+        await request("/api/auth/logout", {
+          method: "POST",
+          cookie: secondCookie,
+          csrfToken: secondBootstrap.csrfToken,
+        })
+      ).status,
+    ).toBe(204);
   });
 
   it("rehashes an outdated PHC without changing password_changed_at", async () => {
@@ -435,6 +630,9 @@ describe("Identity HTTP with PostgreSQL", () => {
       recordLoginSucceeded: () => undefined,
       recordLoginFailed: () => undefined,
       recordLogout: () => undefined,
+      recordOriginRejected: () => undefined,
+      recordCsrfRejected: () => undefined,
+      recordLoginRateLimited: () => undefined,
     };
     const clock = new SystemClock();
     const sessions = new SessionService(
@@ -451,10 +649,17 @@ describe("Identity HTTP with PostgreSQL", () => {
       sessions,
       clock,
       audit,
+      new PersistentLoginRateLimiter(
+        new PrismaLoginRateLimitStore(raceLifecycle.client),
+        new NodeRateLimitFingerprint(config.security.rateLimitHmacKey),
+        clock,
+        config.security.loginRateLimits,
+      ),
     );
     const loginAttempt = useCase.execute({
       email: identity.email,
       password: PASSWORD,
+      clientIp: "127.0.0.1",
     });
 
     await casReached;
@@ -479,5 +684,29 @@ describe("Identity HTTP with PostgreSQL", () => {
         where: { userId: identity.userId },
       }),
     ).toBe(0);
+  }, 30_000);
+
+  it("returns the same 429 contract for known and unknown identities and ignores forwarded IP", async () => {
+    const known = await createIdentity();
+    for (const email of [known.email, "unknown-rate-limit@auth.test"]) {
+      let response: Response | null = null;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        response = await request("/api/auth/login", {
+          method: "POST",
+          forwardedFor: `203.0.113.${attempt + 1}`,
+          forwarded: `for=198.51.100.${attempt + 1}`,
+          realIp: `192.0.2.${attempt + 1}`,
+          body: { email, password: OTHER_PASSWORD },
+        });
+      }
+      if (response === null)
+        throw new Error("Rate-limit request was not executed.");
+      expect(response.status).toBe(429);
+      expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0);
+      await expect(response.json()).resolves.toMatchObject({
+        code: "TOO_MANY_REQUESTS",
+        message: "Demasiados intentos. Intentá nuevamente más tarde.",
+      });
+    }
   }, 30_000);
 });

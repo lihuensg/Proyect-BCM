@@ -9,6 +9,7 @@ import type {
 import type { IdentityAudit } from "./identity-audit.js";
 import { LoginUseCase } from "./login-use-case.js";
 import type { PasswordHasher } from "./password-hasher.js";
+import type { LoginRateLimiter } from "./login-rate-limiter.js";
 
 const PASSWORD = "correct horse battery staple";
 const NOW = new Date("2026-08-17T12:00:00.000Z");
@@ -41,6 +42,12 @@ function fixture(identity: PasswordIdentity | null = ACTIVE_IDENTITY) {
     recordLoginSucceeded: vi.fn(),
     recordLoginFailed: vi.fn(),
     recordLogout: vi.fn(),
+    recordOriginRejected: vi.fn(),
+    recordCsrfRejected: vi.fn(),
+    recordLoginRateLimited: vi.fn(),
+  };
+  const rateLimiter: LoginRateLimiter = {
+    consume: vi.fn(async () => ({ allowed: true as const })),
   };
   const clock: Clock = { now: () => NOW };
   const useCase = new LoginUseCase(
@@ -50,12 +57,14 @@ function fixture(identity: PasswordIdentity | null = ACTIVE_IDENTITY) {
     sessions,
     clock,
     audit,
+    rateLimiter,
   );
 
   return {
     audit,
     credentials,
     passwordHasher,
+    rateLimiter,
     sessions,
     setIdentity(value: PasswordIdentity | null) {
       currentIdentity = value;
@@ -65,6 +74,27 @@ function fixture(identity: PasswordIdentity | null = ACTIVE_IDENTITY) {
 }
 
 describe("LoginUseCase", () => {
+  it("stops before credential lookup and Argon2 when persistent policy blocks", async () => {
+    const setup = fixture();
+    vi.mocked(setup.rateLimiter.consume).mockResolvedValue({
+      allowed: false,
+      retryAfterSeconds: 600,
+    });
+
+    await expect(
+      setup.useCase.execute({
+        email: "user@example.com",
+        password: PASSWORD,
+        clientIp: "127.0.0.1",
+      }),
+    ).resolves.toEqual({ status: "rate-limited", retryAfterSeconds: 600 });
+    expect(
+      setup.credentials.findPasswordIdentityByNormalizedEmail,
+    ).not.toHaveBeenCalled();
+    expect(setup.passwordHasher.verify).not.toHaveBeenCalled();
+    expect(setup.audit.recordLoginRateLimited).toHaveBeenCalledWith(600);
+  });
+
   it("normalizes lookup, rehashes with CAS, then creates a fresh session", async () => {
     const setup = fixture();
 
@@ -72,6 +102,7 @@ describe("LoginUseCase", () => {
       setup.useCase.execute({
         email: "  USER@EXAMPLE.COM ",
         password: PASSWORD,
+        clientIp: "127.0.0.1",
       }),
     ).resolves.toMatchObject({ status: "authenticated" });
     expect(
@@ -103,6 +134,7 @@ describe("LoginUseCase", () => {
     await setup.useCase.execute({
       email: "user@example.com",
       password: PASSWORD,
+      clientIp: "127.0.0.1",
     });
 
     expect(setup.passwordHasher.hash).not.toHaveBeenCalled();
@@ -126,6 +158,7 @@ describe("LoginUseCase", () => {
         setup.useCase.execute({
           email: "user@example.com",
           password: PASSWORD,
+          clientIp: "127.0.0.1",
         }),
       ).resolves.toEqual({ status: "invalid" });
       expect(setup.passwordHasher.verify).toHaveBeenCalledOnce();
@@ -147,6 +180,7 @@ describe("LoginUseCase", () => {
       setup.useCase.execute({
         email: "user@example.com",
         password: PASSWORD,
+        clientIp: "127.0.0.1",
       }),
     ).resolves.toEqual({ status: "invalid" });
     expect(
@@ -165,6 +199,7 @@ describe("LoginUseCase", () => {
       setup.useCase.execute({
         email: "user@example.com",
         password: PASSWORD,
+        clientIp: "127.0.0.1",
       }),
     ).resolves.toMatchObject({ status: "authenticated" });
     expect(setup.sessions.createSession).toHaveBeenCalledOnce();
