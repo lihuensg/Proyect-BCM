@@ -64,6 +64,13 @@ describe("API observability foundation", () => {
       absoluteLifetimeMilliseconds: 43_200_000,
       touchIntervalMilliseconds: 300_000,
     }),
+    sessionCookie: Object.freeze({
+      name: "bcm_session",
+      httpOnly: true,
+      secure: false,
+      sameSite: "Lax",
+      path: "/",
+    }),
   });
   const runtime = createObservability(config, {
     destination,

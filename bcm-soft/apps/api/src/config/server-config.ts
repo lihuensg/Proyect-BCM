@@ -11,11 +11,20 @@ export type SessionConfig = Readonly<{
   touchIntervalMilliseconds: number;
 }>;
 
+export type SessionCookieConfig = Readonly<{
+  name: "__Host-bcm_session" | "bcm_session";
+  httpOnly: true;
+  secure: boolean;
+  sameSite: "Lax";
+  path: "/";
+}>;
+
 export type ServerConfig = Readonly<{
   database: RuntimeDatabaseConfig;
   environment: RuntimeEnvironment;
   port: number;
   session: SessionConfig;
+  sessionCookie: SessionCookieConfig;
 }>;
 
 const MINUTE_MILLISECONDS = 60_000;
@@ -150,6 +159,20 @@ function loadSessionConfig(environment: NodeJS.ProcessEnv): SessionConfig {
   });
 }
 
+function loadSessionCookieConfig(
+  runtimeEnvironment: RuntimeEnvironment,
+): SessionCookieConfig {
+  const production = runtimeEnvironment === "production";
+
+  return Object.freeze({
+    name: production ? "__Host-bcm_session" : "bcm_session",
+    httpOnly: true,
+    secure: production,
+    sameSite: "Lax",
+    path: "/",
+  });
+}
+
 export function loadServerConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ServerConfig {
@@ -160,5 +183,6 @@ export function loadServerConfig(
     environment: runtimeEnvironment,
     port: readPort(environment, runtimeEnvironment),
     session: loadSessionConfig(environment),
+    sessionCookie: loadSessionCookieConfig(runtimeEnvironment),
   });
 }

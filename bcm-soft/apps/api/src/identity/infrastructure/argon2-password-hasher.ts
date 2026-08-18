@@ -199,6 +199,10 @@ export class Argon2PasswordHasher implements PasswordHasher {
     }
   }
 
+  isSupportedHash(passwordHash: string): boolean {
+    return inspectArgon2Phc(passwordHash)?.algorithm === "argon2id";
+  }
+
   needsRehash(passwordHash: string): boolean {
     const inspection = inspectArgon2Phc(passwordHash);
     return inspection === null || !matchesCurrentPolicy(inspection);

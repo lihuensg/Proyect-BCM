@@ -12,9 +12,12 @@ import {
 async function bootstrap(): Promise<void> {
   const config = loadServerConfig();
   const observability = createObservability(config);
-  const app = await NestFactory.create(AppModule, {
-    logger: observability.logger,
-  });
+  const app = await NestFactory.create(
+    AppModule.register(config, observability.logger),
+    {
+      logger: observability.logger,
+    },
+  );
 
   app.setGlobalPrefix("api");
   configureObservability(app, observability);

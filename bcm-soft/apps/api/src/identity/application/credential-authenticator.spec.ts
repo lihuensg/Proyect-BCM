@@ -15,10 +15,12 @@ function createHasherMock(
 ): PasswordHasher & {
   verify: ReturnType<typeof vi.fn<PasswordHasher["verify"]>>;
   needsRehash: ReturnType<typeof vi.fn<PasswordHasher["needsRehash"]>>;
+  isSupportedHash: ReturnType<typeof vi.fn<PasswordHasher["isSupportedHash"]>>;
 } {
   return {
     hash: vi.fn<PasswordHasher["hash"]>(),
     verify: vi.fn<PasswordHasher["verify"]>(async () => passwordMatches),
+    isSupportedHash: vi.fn<PasswordHasher["isSupportedHash"]>(() => true),
     needsRehash: vi.fn<PasswordHasher["needsRehash"]>(() => rehashRequired),
   };
 }
@@ -97,6 +99,24 @@ describe("CredentialAuthenticator", () => {
     });
 
     expect(hasher.needsRehash).not.toHaveBeenCalled();
+  });
+
+  it("uses the dummy path for a malformed stored PHC", async () => {
+    const hasher = createHasherMock(false);
+    hasher.isSupportedHash.mockReturnValue(false);
+    const authenticator = new CredentialAuthenticator(hasher);
+
+    await expect(
+      authenticator.authenticate({
+        userStatus: "Active",
+        storedPasswordHash: "malformed-phc",
+        candidatePassword: PASSWORD,
+      }),
+    ).resolves.toEqual({ status: "invalid" });
+    expect(hasher.verify).toHaveBeenCalledWith(
+      DEFAULT_DUMMY_PASSWORD_HASH,
+      PASSWORD,
+    );
   });
 
   it("bounds an overlong candidate while preserving comparable verification work", async () => {

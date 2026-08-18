@@ -57,4 +57,12 @@ export class PrismaClientLifecycle {
     await this.#client.$disconnect();
     this.#connected = false;
   }
+
+  async onModuleInit(): Promise<void> {
+    await this.connect();
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.disconnect();
+  }
 }

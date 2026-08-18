@@ -27,10 +27,18 @@ describe("loadServerConfig", () => {
         absoluteLifetimeMilliseconds: 43_200_000,
         touchIntervalMilliseconds: 300_000,
       },
+      sessionCookie: {
+        name: "__Host-bcm_session",
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax",
+        path: "/",
+      },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.database)).toBe(true);
     expect(Object.isFrozen(config.session)).toBe(true);
+    expect(Object.isFrozen(config.sessionCookie)).toBe(true);
   });
 
   it("rejects a missing required runtime environment", () => {
@@ -81,6 +89,13 @@ describe("loadServerConfig", () => {
         idleTimeoutMilliseconds: 1_800_000,
         absoluteLifetimeMilliseconds: 43_200_000,
         touchIntervalMilliseconds: 300_000,
+      },
+      sessionCookie: {
+        name: "bcm_session",
+        httpOnly: true,
+        secure: false,
+        sameSite: "Lax",
+        path: "/",
       },
     });
 
@@ -172,6 +187,7 @@ describe("loadServerConfig", () => {
       absoluteLifetimeMilliseconds: 86_400_000,
       touchIntervalMilliseconds: 600_000,
     });
+    expect(config.sessionCookie.secure).toBe(false);
   });
 
   it.each([

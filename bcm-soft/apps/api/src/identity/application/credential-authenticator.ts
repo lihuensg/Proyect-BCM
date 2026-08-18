@@ -45,7 +45,12 @@ export class CredentialAuthenticator {
   async authenticate(
     input: CredentialAuthenticationInput,
   ): Promise<CredentialAuthenticationResult> {
-    const passwordHash = input.storedPasswordHash ?? this.dummyPasswordHash;
+    const hasSupportedStoredHash =
+      input.storedPasswordHash !== null &&
+      this.passwordHasher.isSupportedHash(input.storedPasswordHash);
+    const passwordHash = hasSupportedStoredHash
+      ? input.storedPasswordHash
+      : this.dummyPasswordHash;
     const candidate = prepareCandidatePassword(input.candidatePassword);
     const passwordMatches = await this.passwordHasher.verify(
       passwordHash,
@@ -56,7 +61,7 @@ export class CredentialAuthenticator {
       !candidate.satisfiesPolicy ||
       !passwordMatches ||
       input.userStatus !== "Active" ||
-      input.storedPasswordHash === null
+      !hasSupportedStoredHash
     ) {
       return INVALID_RESULT;
     }

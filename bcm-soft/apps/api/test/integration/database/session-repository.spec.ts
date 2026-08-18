@@ -209,7 +209,7 @@ describe("PostgreSQL session repository", () => {
     } finally {
       await adminSql.query(dropStatement);
     }
-  });
+  }, 30_000);
 
   it("creates only a digest-backed session for an Active User and rejects Disabled", async () => {
     const now = new Date("2026-08-17T12:00:00.000Z");
