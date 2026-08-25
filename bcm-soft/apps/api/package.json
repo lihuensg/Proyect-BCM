@@ -10,6 +10,8 @@
     "db:migrate:deploy": "prisma migrate deploy --config prisma.config.ts",
     "db:migrate:dev": "prisma migrate dev --config prisma.config.ts",
     "db:migrate:status": "prisma migrate status --config prisma.config.ts",
+    "dev": "node scripts/start-development-api.ts",
+    "dev:create-user": "corepack pnpm run build && node scripts/create-development-user.mjs",
     "prisma:generate": "cd prisma && prisma generate --schema schema.prisma",
     "start": "node dist/main.js",
     "test": "corepack pnpm run prisma:generate && corepack pnpm run test:unit && corepack pnpm run test:db",

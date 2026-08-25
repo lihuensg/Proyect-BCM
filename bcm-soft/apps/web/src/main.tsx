@@ -5,6 +5,7 @@ import { RouterProvider } from "react-router/dom";
 import { AppErrorBoundary } from "./app/app-error-boundary";
 import { AppProviders } from "./app/app-providers";
 import { router } from "./app/router";
+import "./styles/global.css";
 
 const rootElement = document.getElementById("root");
 

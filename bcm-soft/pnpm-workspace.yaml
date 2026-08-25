@@ -5,4 +5,5 @@ packages:
 allowBuilds:
   "@prisma/engines@7.9.1": true
   "argon2@0.45.1": true
+  "msw@2.15.0": false
   "prisma@7.9.1": true

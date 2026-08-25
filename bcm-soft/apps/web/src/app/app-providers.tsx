@@ -1,10 +1,21 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import type { PropsWithChildren, ReactNode } from "react";
 
-const queryClient = new QueryClient();
+import {
+  AppServicesContext,
+  defaultAppServices,
+  type AppServices,
+} from "./app-services";
 
-export function AppProviders({ children }: PropsWithChildren): ReactNode {
+export function AppProviders({
+  children,
+  services = defaultAppServices,
+}: PropsWithChildren<{ services?: AppServices }>): ReactNode {
   return (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <AppServicesContext.Provider value={services}>
+      <QueryClientProvider client={services.queryClient}>
+        {children}
+      </QueryClientProvider>
+    </AppServicesContext.Provider>
   );
 }
