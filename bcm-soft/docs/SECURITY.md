@@ -753,16 +753,16 @@ WebAuthn/TOTP, JIT support access, security scanning avanzado, provenance/signin
 
 Las decisiones respetan el modular monolith, REST, server-side sessions, PostgreSQL shared multi-tenancy, Prisma encapsulado, object storage privado y ausencia inicial de Redis definidos en BCM-003/ADRs.
 
-**Database Review Required:** Yes — additive follow-up before identity implementation.
+**Database Review Required:** Resolved by the completed BCM-005 database review and approved RG-02.
 
-No existe contradicción con DATABASE.md, pero la persistencia conceptual de security exige definir mediante una revisión posterior y migrations futuras:
+`DATABASE.md` registra como resueltos los cuatro puntos de persistencia que SECURITY había remitido a revisión:
 
 - password reset tokens e invitation tokens hash-at-rest;
 - `authorization_version` de Membership y current Organization/version observada por Session;
 - estado persistente mínimo de rate limiting de identidad;
 - constraints, retención, índices y RLS/exclusión de esas tablas.
 
-Esta tarea no modifica `DATABASE.md`, Prisma ni PostgreSQL.
+Identity foundation fue implementada posteriormente sobre esa base revisada. Por lo tanto, ese prerrequisito de base de datos ya no está pendiente; las decisiones e implementaciones futuras de tenancy y RLS permanecen en Phase 4 / RG-04. Esta alineación no modifica las decisiones criptográficas, de sesiones ni de RLS.
 
 ## Mandatory review result
 
@@ -777,7 +777,7 @@ Revisión realizada contra PRODUCT, DOMAIN completo, ARCHITECTURE, DATABASE y to
 - secrets/tokens: CSPRNG, hash-at-rest, redaction y secret manager;
 - scope: sin SSO, IAM dinámico, Redis, SIEM o infraestructura prematura.
 
-No se detectaron contradicciones arquitectónicas. La revisión de base requerida es aditiva y está delimitada arriba.
+No se detectaron contradicciones arquitectónicas. La revisión de base delimitada arriba ya estaba completada y aprobada cuando se implementó Identity; no constituye un claim de production readiness ni adelanta el alcance de Phase 4 / RG-04.
 
 ## Technical references
 
