@@ -9,8 +9,8 @@ export type AppServices = Readonly<{
   authApi: AuthApi;
   queryClient: QueryClient;
   sessionCoordinator: Readonly<{
-    markAuthenticated(): void;
-    markAnonymous(): void;
+    markAuthenticated(): Promise<void>;
+    confirmSessionLoss(): Promise<void>;
     isSessionLost(): boolean;
     subscribe(listener: () => void): () => void;
   }>;
@@ -23,8 +23,7 @@ export function createAppServices(
   }> = {},
 ): AppServices {
   const queryClient = new QueryClient();
-  let authenticationLoss: Promise<void> | null = null;
-  let authenticated = false;
+  let sessionLoss: Promise<void> | null = null;
   let sessionLost = false;
   const sessionListeners = new Set<() => void>();
 
@@ -34,17 +33,25 @@ export function createAppServices(
     for (const listener of sessionListeners) listener();
   };
 
-  const handleAuthenticationRequired = (): Promise<void> => {
-    if (!authenticated) return authenticationLoss ?? Promise.resolve();
-    authenticated = false;
-    setSessionLost(true);
-    authenticationLoss ??= (async () => {
+  const confirmSessionLoss = (): Promise<void> => {
+    if (sessionLoss !== null) return sessionLoss;
+    if (sessionLost) return Promise.resolve();
+
+    const transition = (async () => {
       await queryClient.cancelQueries();
       queryClient.clear();
-    })().finally(() => {
-      authenticationLoss = null;
-    });
-    return authenticationLoss;
+      setSessionLost(true);
+    })();
+    sessionLoss = transition;
+    void transition.then(
+      () => {
+        if (sessionLoss === transition) sessionLoss = null;
+      },
+      () => {
+        if (sessionLoss === transition) sessionLoss = null;
+      },
+    );
+    return sessionLoss;
   };
 
   const apiClient = new ApiClient({
@@ -52,21 +59,18 @@ export function createAppServices(
     ...(options.fetchImplementation === undefined
       ? {}
       : { fetchImplementation: options.fetchImplementation }),
-    onAuthenticationRequired: handleAuthenticationRequired,
+    onAuthenticationRequired: confirmSessionLoss,
   });
 
   return Object.freeze({
     authApi: new AuthApi(apiClient),
     queryClient,
     sessionCoordinator: Object.freeze({
-      markAuthenticated() {
-        authenticated = true;
+      async markAuthenticated() {
+        await sessionLoss;
         setSessionLost(false);
       },
-      markAnonymous() {
-        authenticated = false;
-        setSessionLost(true);
-      },
+      confirmSessionLoss,
       isSessionLost() {
         return sessionLost;
       },

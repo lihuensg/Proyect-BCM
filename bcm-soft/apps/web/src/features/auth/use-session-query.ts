@@ -10,9 +10,9 @@ export function useSessionQuery() {
 
   useEffect(() => {
     if (query.data?.status === "authenticated") {
-      sessionCoordinator.markAuthenticated();
+      void sessionCoordinator.markAuthenticated();
     } else if (query.data?.status === "anonymous") {
-      sessionCoordinator.markAnonymous();
+      void sessionCoordinator.confirmSessionLoss();
     }
   }, [query.data, sessionCoordinator]);
 

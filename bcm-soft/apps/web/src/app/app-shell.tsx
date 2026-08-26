@@ -17,9 +17,7 @@ export function AppShell(): ReactNode {
       await authApi.logout(session.data.session.csrfToken);
     },
     async onSuccess() {
-      await queryClient.cancelQueries();
-      queryClient.clear();
-      sessionCoordinator.markAnonymous();
+      await sessionCoordinator.confirmSessionLoss();
     },
     onError(error) {
       if (
@@ -34,9 +32,7 @@ export function AppShell(): ReactNode {
           })
           .then(async (recoveredSession) => {
             if (recoveredSession.status !== "anonymous") return;
-            await queryClient.cancelQueries();
-            queryClient.clear();
-            sessionCoordinator.markAnonymous();
+            await sessionCoordinator.confirmSessionLoss();
           })
           .catch(() => undefined);
       }

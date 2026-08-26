@@ -79,9 +79,9 @@ export function LoginForm(): ReactNode {
       }
       return result;
     },
-    onSuccess() {
+    async onSuccess() {
       setPassword("");
-      sessionCoordinator.markAuthenticated();
+      await sessionCoordinator.markAuthenticated();
       void navigate("/", { replace: true });
     },
     onError(error) {

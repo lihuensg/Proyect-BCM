@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { createMemoryRouter, RouterProvider } from "react-router";
@@ -8,6 +8,7 @@ import { AppProviders } from "../../app/app-providers";
 import { createAppServices } from "../../app/app-services";
 import { appRoutes } from "../../app/router";
 import { testServer } from "../../test/server";
+import { authKeys } from "./auth-queries";
 
 const BASE_URL = "http://localhost:3000/api";
 const USER_ID = "019c8f52-97d3-7000-8000-000000000001";
@@ -29,8 +30,12 @@ function authenticationRequired() {
   );
 }
 
-function renderApp(initialPath: string) {
+function renderApp(
+  initialPath: string,
+  prepareServices?: (services: ReturnType<typeof createAppServices>) => void,
+) {
   const services = createAppServices({ apiBaseUrl: BASE_URL });
+  prepareServices?.(services);
   const router = createMemoryRouter(appRoutes, {
     initialEntries: [initialPath],
   });
@@ -60,6 +65,31 @@ describe("authentication bootstrap and login", () => {
     expect(
       await screen.findByRole("heading", { name: "Ingresá a tu cuenta" }),
     ).toBeDefined();
+  });
+
+  it("uses confirmed session loss cleanup for an anonymous initial bootstrap", async () => {
+    testServer.use(
+      http.get(`${BASE_URL}/auth/session`, async () => {
+        await delay(20);
+        return authenticationRequired();
+      }),
+    );
+    const { services } = renderApp("/", (appServices) => {
+      appServices.queryClient.setQueryData(["private", "pre-bootstrap"], {
+        value: "must-clear",
+      });
+    });
+    const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
+
+    expect(
+      await screen.findByRole("heading", { name: "Ingresá a tu cuenta" }),
+    ).toBeDefined();
+    await waitFor(() => {
+      expect(
+        services.queryClient.getQueryData(["private", "pre-bootstrap"]),
+      ).toBeUndefined();
+    });
+    expect(cancelQueries).toHaveBeenCalledTimes(1);
   });
 
   it("submits the password unchanged and authenticates only after bootstrap", async () => {
@@ -155,9 +185,14 @@ describe("authentication bootstrap and login", () => {
       ),
     );
     const user = userEvent.setup();
-    renderApp("/login");
+    const { services } = renderApp("/login");
     const email = await screen.findByLabelText<HTMLInputElement>("Email");
     const password = screen.getByLabelText<HTMLInputElement>("Contraseña");
+    await services.sessionCoordinator.confirmSessionLoss();
+    services.queryClient.setQueryData(["private", "anonymous-draft"], {
+      value: "preserved",
+    });
+    const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
 
     await user.type(email, "owner@bcm.test");
     await user.type(password, "incorrect password");
@@ -168,6 +203,10 @@ describe("authentication bootstrap and login", () => {
     ).toBeDefined();
     expect(email.value).toBe("owner@bcm.test");
     expect(password.value).toBe("");
+    expect(
+      services.queryClient.getQueryData(["private", "anonymous-draft"]),
+    ).toEqual({ value: "preserved" });
+    expect(cancelQueries).not.toHaveBeenCalled();
   });
 
   it.each(["network", "server"] as const)(
@@ -195,9 +234,10 @@ describe("authentication bootstrap and login", () => {
       );
       const user = userEvent.setup();
       const { services } = renderApp("/login");
-      const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
       const email = await screen.findByLabelText<HTMLInputElement>("Email");
       const password = screen.getByLabelText<HTMLInputElement>("Contraseña");
+      await services.sessionCoordinator.confirmSessionLoss();
+      const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
 
       await user.type(email, "owner@bcm.test");
       await user.type(password, "password");
@@ -367,7 +407,11 @@ describe("authentication bootstrap and login", () => {
         ),
       );
 
-      renderApp("/");
+      const { services } = renderApp("/", (appServices) => {
+        appServices.queryClient.setQueryData(["private", failure], {
+          value: "preserved",
+        });
+      });
 
       expect(
         await screen.findByRole("heading", {
@@ -377,11 +421,71 @@ describe("authentication bootstrap and login", () => {
       expect(
         screen.queryByRole("heading", { name: "Ingresá a tu cuenta" }),
       ).toBeNull();
+      expect(services.queryClient.getQueryData(["private", failure])).toEqual({
+        value: "preserved",
+      });
     },
   );
 });
 
 describe("logout and cache isolation", () => {
+  it("isolates User B after an authenticated session refetch loses User A", async () => {
+    const userBSession = {
+      ...SESSION,
+      user: { id: "019c8f52-97d3-7000-8000-000000000002" },
+      csrfToken: `v1.${"B".repeat(43)}`,
+    } as const;
+    let identity: "user-a" | "anonymous" | "user-b" = "user-a";
+    testServer.use(
+      http.get(`${BASE_URL}/auth/session`, () => {
+        if (identity === "anonymous") return authenticationRequired();
+        return HttpResponse.json(
+          identity === "user-a" ? SESSION : userBSession,
+        );
+      }),
+      http.post(`${BASE_URL}/auth/login`, () => {
+        identity = "user-b";
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const user = userEvent.setup();
+    const { router, services } = renderApp("/");
+
+    await screen.findByRole("heading", { name: "Sesión activa" });
+    const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
+    services.queryClient.setQueryData(["org", "org-a", "private-resource"], {
+      secret: "user-a-data",
+    });
+    identity = "anonymous";
+    await act(async () => {
+      await services.queryClient.refetchQueries({
+        queryKey: authKeys.session,
+      });
+    });
+
+    await screen.findByRole("heading", { name: "Ingresá a tu cuenta" });
+    expect(router.state.location.pathname).toBe("/login");
+    await waitFor(() => {
+      expect(
+        services.queryClient.getQueryData(["org", "org-a", "private-resource"]),
+      ).toBeUndefined();
+    });
+    expect(cancelQueries).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByLabelText("Email"), "user-b@bcm.test");
+    await user.type(screen.getByLabelText("Contraseña"), "user-b-password");
+    await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
+
+    await screen.findByRole("heading", { name: "Sesión activa" });
+    expect(
+      services.queryClient.getQueryData(["org", "org-a", "private-resource"]),
+    ).toBeUndefined();
+    expect(services.queryClient.getQueryData(authKeys.session)).toEqual({
+      status: "authenticated",
+      session: userBSession,
+    });
+  });
+
   it("sends CSRF, clears every cached user value, and returns to login", async () => {
     let authenticated = true;
     testServer.use(
@@ -522,9 +626,13 @@ describe("logout and cache isolation", () => {
       ),
     );
     const user = userEvent.setup();
-    renderApp("/");
+    const { services } = renderApp("/");
 
     await screen.findByRole("heading", { name: "Sesión activa" });
+    services.queryClient.setQueryData(["private", "origin-403"], {
+      value: "preserved",
+    });
+    const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
     await user.click(screen.getByRole("button", { name: "Cerrar sesión" }));
 
     expect(
@@ -535,6 +643,10 @@ describe("logout and cache isolation", () => {
     expect(
       screen.getByRole("heading", { name: "Sesión activa" }),
     ).toBeDefined();
+    expect(
+      services.queryClient.getQueryData(["private", "origin-403"]),
+    ).toEqual({ value: "preserved" });
+    expect(cancelQueries).not.toHaveBeenCalled();
   });
 
   it("clears all authenticated state when CSRF recovery finds no session", async () => {
@@ -564,6 +676,7 @@ describe("logout and cache isolation", () => {
     const { services } = renderApp("/");
 
     await screen.findByRole("heading", { name: "Sesión activa" });
+    const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
     services.queryClient.setQueryData(["private", "user-a"], {
       value: "must-clear",
     });
@@ -577,6 +690,7 @@ describe("logout and cache isolation", () => {
     expect(
       services.queryClient.getQueryData(["private", "user-a"]),
     ).toBeUndefined();
+    expect(cancelQueries).toHaveBeenCalledTimes(1);
   });
 
   it.each(["network", "server"] as const)(
@@ -681,7 +795,7 @@ describe("logout and cache isolation", () => {
       }),
     );
     const services = createAppServices({ apiBaseUrl: BASE_URL });
-    services.sessionCoordinator.markAuthenticated();
+    await services.sessionCoordinator.markAuthenticated();
     services.queryClient.setQueryData(["org", "organization-a", "inventory"], {
       secret: "user-a-data",
     });
