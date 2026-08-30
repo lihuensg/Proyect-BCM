@@ -397,7 +397,8 @@ RG02-F001 (runtime database identity fail-fast assertion) is **Resolved** by BCM
 RG-03 is **Approved with follow-ups** and follows BCM-WEB-002 and all identity security tests.
 RG03-F001 (confirmed session-loss cache isolation) is **Resolved** by the centralized Web session-loss transition with bootstrap, refetch, mutation, CSRF-recovery, and User A-to-User B regression evidence.
 RG03-F002 (`SECURITY.md` database-review status alignment) is **Resolved** against the completed BCM-005 database review and approved RG-02.
-RG03-F003, RG03-F004, and RG03-F005 remain **Pending**.
+RG03-F003 (durable governance record for unverifiable RG-02 findings) is **Resolved** by `docs/reviews/RG-02-FINDINGS-RECORD.md` without reconstructing unavailable history.
+RG03-F004 and RG03-F005 remain **Pending**.
 RG-04 follows BCM-TEN-004 and is the hard boundary before business data.
 RG-05 follows BCM-CAT-001 and may require a bounded refactor before pattern replication.
 
