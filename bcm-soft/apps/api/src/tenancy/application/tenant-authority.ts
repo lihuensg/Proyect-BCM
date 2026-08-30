@@ -59,6 +59,13 @@ export interface TenantAuthorityResolver {
   ): Promise<TenantAuthorityResolution>;
 }
 
+export class TenantAuthorityPersistenceError extends Error {
+  constructor(cause: unknown) {
+    super("Tenant authority persistence failed.", { cause });
+    this.name = "TenantAuthorityPersistenceError";
+  }
+}
+
 const DENIED_RESOLUTION: TenantAuthorityResolution = Object.freeze({
   status: "denied",
 });
