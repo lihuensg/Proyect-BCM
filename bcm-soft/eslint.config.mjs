@@ -38,6 +38,28 @@ export default defineConfig(
     },
   },
   {
+    files: ["apps/api/src/tenancy/application/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "@prisma/client",
+                "**/generated/prisma/**",
+                "@nestjs/**",
+                "**/infrastructure/**",
+              ],
+              message:
+                "Tenancy application contracts must not depend on Prisma, Nest, or Infrastructure.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["apps/web/src/**/*.{ts,tsx}"],
     ignores: ["apps/web/src/config/public-config.ts"],
     rules: {
