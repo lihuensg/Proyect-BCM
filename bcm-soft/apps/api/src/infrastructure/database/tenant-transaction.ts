@@ -15,6 +15,9 @@ function normalizeOrganizationId(organizationId: string): string {
   return normalized;
 }
 
+// Foundation-only RLS feasibility helper. It intentionally exposes Prisma to
+// database integration tests and must not be used by product Application or
+// Presentation code. Tenant-owned product work uses TenantPersistenceScope.
 export async function withTenantTransaction<Result>(
   client: PrismaClient,
   organizationId: string,
