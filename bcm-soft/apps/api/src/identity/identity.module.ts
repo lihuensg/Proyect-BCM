@@ -206,6 +206,7 @@ export class IdentityModule {
       module: IdentityModule,
       controllers: [AuthController],
       providers,
+      exports: [PrismaClientLifecycle, SessionService, SessionCookieCodec],
     };
   }
 }

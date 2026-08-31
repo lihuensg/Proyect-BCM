@@ -2,8 +2,8 @@ import { type DynamicModule, Module } from "@nestjs/common";
 
 import type { ServerConfig } from "./config/server-config.js";
 import { HealthController } from "./health/health.controller.js";
-import { IdentityModule } from "./identity/identity.module.js";
 import type { PinoLoggerAdapter } from "./observability/pino-logger.adapter.js";
+import { TenancyModule } from "./tenancy/tenancy.module.js";
 
 @Module({ controllers: [HealthController] })
 export class AppModule {
@@ -11,9 +11,12 @@ export class AppModule {
     config: ServerConfig,
     logger: PinoLoggerAdapter,
   ): DynamicModule {
+    const tenancyModule = TenancyModule.register(config, logger);
+
     return {
       module: AppModule,
-      imports: [IdentityModule.register(config, logger)],
+      imports: [tenancyModule],
+      exports: [tenancyModule],
     };
   }
 }

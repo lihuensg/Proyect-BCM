@@ -38,6 +38,23 @@ export default defineConfig(
     },
   },
   {
+    files: ["apps/api/src/**/application/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/infrastructure/database/tenant-transaction*"],
+              message:
+                "Product Application code must use TenantPersistenceScope instead of the foundation-only tenant transaction helper.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ["apps/api/src/tenancy/application/**/*.ts"],
     rules: {
       "no-restricted-imports": [
@@ -53,6 +70,27 @@ export default defineConfig(
               ],
               message:
                 "Tenancy application contracts must not depend on Prisma, Nest, or Infrastructure.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ["apps/api/src/tenancy/presentation/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "@prisma/client",
+                "**/generated/prisma/**",
+                "**/infrastructure/**",
+              ],
+              message:
+                "Tenancy Presentation must not depend on Prisma or Infrastructure.",
             },
           ],
         },
