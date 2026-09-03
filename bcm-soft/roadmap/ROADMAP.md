@@ -383,7 +383,7 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 | BCM-SEC-003 | Completed | Critical | SEC-002 | Login/logout/session endpoints, HttpOnly cookie lifecycle, safe 401 behavior, audit hooks |
 | BCM-SEC-004 | Completed | Critical | SEC-003 | CSRF, Origin/Referer, identity rate limiting, safe 401/403/error behavior, negative security tests |
 | BCM-WEB-002 | Completed | High | SEC-003, SEC-004, WEB-001 | Real login, session bootstrap, logout, 401/403 distinction, auth cache cleanup; RG-03 |
-| BCM-TEN-001 | Pending | Critical | RG-03, DB-004 | Resolve Organization from session and active Membership; fail closed and repository context contract |
+| BCM-TEN-001 | Completed | Critical | RG-03, DB-004 | Resolve Organization from session and active Membership; fail closed and repository context contract |
 | BCM-TEN-002 | Pending | Critical | TEN-001 | Central role-to-permission map, authorization version, semantic guards, deny-default tests |
 | BCM-TEN-003 | Pending | Critical | TEN-001, TEN-002 | First tenant-owned probe resource with application scope + transaction-local RLS + pool leakage tests |
 | BCM-TEN-004 | Pending | Critical | TEN-003, WEB-002 | Organization switch, Membership revalidation, query-key scoping and complete cache clearing; RG-04 |
@@ -400,6 +400,7 @@ RG03-F002 (`SECURITY.md` database-review status alignment) is **Resolved** again
 RG03-F003 (durable governance record for unverifiable RG-02 findings) is **Resolved** by `docs/reviews/RG-02-FINDINGS-RECORD.md` without reconstructing unavailable history.
 RG03-F004 remains **Pending**.
 RG03-F005 (versioned durable browser validation evidence) is **Resolved** by `docs/reviews/RG-03-BROWSER-EVIDENCE.md` without adding automation or sensitive artifacts.
+BCM-TEN-001 closes session-derived tenant authority, active Membership revalidation, and tenant-bound persistence scope. It does not complete semantic RBAC/authorization-version enforcement (BCM-TEN-002), product-table RLS (BCM-TEN-003), Organization switching (BCM-TEN-004), or RG-04.
 RG-04 follows BCM-TEN-004 and is the hard boundary before business data.
 RG-05 follows BCM-CAT-001 and may require a bounded refactor before pattern replication.
 

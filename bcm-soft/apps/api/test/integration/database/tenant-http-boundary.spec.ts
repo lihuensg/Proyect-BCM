@@ -102,6 +102,10 @@ class TenantBoundaryTestController {
   execute(context: TenantContext): Promise<TenantProbeResponse> {
     return this.probe.execute(context);
   }
+
+  executeWithPath(context: TenantContext): Promise<TenantProbeResponse> {
+    return this.probe.execute(context);
+  }
 }
 
 Inject(TENANT_PERSISTENCE_SCOPE)(TenantBoundaryProbeUseCase, undefined, 0);
@@ -120,6 +124,24 @@ UseGuards(TenantAuthorityGuard)(
   TenantBoundaryTestController.prototype,
   "execute",
   executeDescriptor,
+);
+const executeWithPathDescriptor = Object.getOwnPropertyDescriptor(
+  TenantBoundaryTestController.prototype,
+  "executeWithPath",
+);
+if (executeWithPathDescriptor === undefined) {
+  throw new Error("The test-only tenant path handler is unavailable.");
+}
+CurrentTenant()(TenantBoundaryTestController.prototype, "executeWithPath", 0);
+Post(":organizationId")(
+  TenantBoundaryTestController.prototype,
+  "executeWithPath",
+  executeWithPathDescriptor,
+);
+UseGuards(TenantAuthorityGuard)(
+  TenantBoundaryTestController.prototype,
+  "executeWithPath",
+  executeWithPathDescriptor,
 );
 Controller("test-only/tenant-boundary")(TenantBoundaryTestController);
 
@@ -242,12 +264,16 @@ describe("Tenant authority Nest/HTTP boundary with PostgreSQL", () => {
       body?: unknown;
       cookie?: string;
       organizationHeader?: string;
+      tenantHeader?: string;
     }> = {},
   ): Promise<Response> {
     const headers: Record<string, string> = {};
     if (input.cookie !== undefined) headers.cookie = input.cookie;
     if (input.organizationHeader !== undefined) {
       headers["x-organization-id"] = input.organizationHeader;
+    }
+    if (input.tenantHeader !== undefined) {
+      headers["x-tenant-id"] = input.tenantHeader;
     }
     if (input.body !== undefined) headers["content-type"] = "application/json";
 
@@ -522,7 +548,7 @@ describe("Tenant authority Nest/HTTP boundary with PostgreSQL", () => {
     );
   });
 
-  it("ignores Organization IDs supplied by header and body as authority", async () => {
+  it("ignores attacker-supplied tenant and identity fields across HTTP inputs", async () => {
     const userId = await createUser();
     const organizationAId = await createOrganization();
     const membershipAId = await createMembership(userId, organizationAId);
@@ -532,11 +558,24 @@ describe("Tenant authority Nest/HTTP boundary with PostgreSQL", () => {
       organizationId: organizationAId,
     });
 
-    const response = await request(undefined, {
-      body: { organizationId: organizationBId },
-      cookie: session.cookie,
-      organizationHeader: organizationBId,
-    });
+    const attackerMembershipId = generateUuidV7();
+    const attackerUserId = generateUuidV7();
+    const response = await request(
+      `/api/test-only/tenant-boundary/${organizationBId}` +
+        `?organizationId=${organizationBId}` +
+        `&membershipId=${attackerMembershipId}` +
+        `&userId=${attackerUserId}`,
+      {
+        body: {
+          membershipId: attackerMembershipId,
+          organizationId: organizationBId,
+          userId: attackerUserId,
+        },
+        cookie: session.cookie,
+        organizationHeader: organizationBId,
+        tenantHeader: organizationBId,
+      },
+    );
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toMatchObject({
