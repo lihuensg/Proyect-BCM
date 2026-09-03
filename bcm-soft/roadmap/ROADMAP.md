@@ -362,7 +362,7 @@ Every task is issued separately using the full task template.
 
 ## 14. Detailed near-term backlog
 
-The first 24 tasks are planned in greater detail. Scope is refined at task start without changing dependencies or inventing rules.
+The first 25 tasks are planned in greater detail. Scope is refined at task start without changing dependencies or inventing rules.
 
 | ID | Status | Risk | Dependencies | Outcome and acceptance focus |
 |---|---|---|---|---|
@@ -384,7 +384,8 @@ The first 24 tasks are planned in greater detail. Scope is refined at task start
 | BCM-SEC-004 | Completed | Critical | SEC-003 | CSRF, Origin/Referer, identity rate limiting, safe 401/403/error behavior, negative security tests |
 | BCM-WEB-002 | Completed | High | SEC-003, SEC-004, WEB-001 | Real login, session bootstrap, logout, 401/403 distinction, auth cache cleanup; RG-03 |
 | BCM-TEN-001 | Completed | Critical | RG-03, DB-004 | Resolve Organization from session and active Membership; fail closed and repository context contract |
-| BCM-TEN-002 | Pending | Critical | TEN-001 | Central role-to-permission map, authorization version, semantic guards, deny-default tests |
+| BCM-TEN-002A | Completed | Critical | TEN-001 | Durable RBAC V1 role/permission, Owner-invariant and stale-session decisions; resolves TEN002-B001/B002 without runtime implementation |
+| BCM-TEN-002 | Pending | Critical | TEN-001, TEN-002A | Central role-to-permission map, authorization version, semantic guards, deny-default tests |
 | BCM-TEN-003 | Pending | Critical | TEN-001, TEN-002 | First tenant-owned probe resource with application scope + transaction-local RLS + pool leakage tests |
 | BCM-TEN-004 | Pending | Critical | TEN-003, WEB-002 | Organization switch, Membership revalidation, query-key scoping and complete cache clearing; RG-04 |
 | BCM-DS-001 | Pending | Medium | WEB-001 | Complete `DESIGN_SYSTEM.md` foundation: tokens, typography, spacing, core form/table/feedback/responsive patterns |
@@ -401,6 +402,7 @@ RG03-F003 (durable governance record for unverifiable RG-02 findings) is **Resol
 RG03-F004 remains **Pending**.
 RG03-F005 (versioned durable browser validation evidence) is **Resolved** by `docs/reviews/RG-03-BROWSER-EVIDENCE.md` without adding automation or sensitive artifacts.
 BCM-TEN-001 closes session-derived tenant authority, active Membership revalidation, and tenant-bound persistence scope. It does not complete semantic RBAC/authorization-version enforcement (BCM-TEN-002), product-table RLS (BCM-TEN-003), Organization switching (BCM-TEN-004), or RG-04.
+BCM-TEN-002A records the approved V1 role/permission matrix, Owner invariants and fail-closed authorization-version renewal policy. TEN002-B001 and TEN002-B002 are **Resolved** as decisions; BCM-TEN-002 remains **Pending** until its technical implementation and review are complete.
 RG-04 follows BCM-TEN-004 and is the hard boundary before business data.
 RG-05 follows BCM-CAT-001 and may require a bounded refactor before pattern replication.
 

@@ -2,7 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-001 — Product Definition
-**Última actualización:** BCM-012A — Customer Business Decisions Reconciliation
+**Última actualización:** BCM-TEN-002A — Durable RBAC V1 Product/Security Decisions
 
 Este documento es la fuente principal de la definición funcional y de negocio de BCM SOFT. Describe el producto y su alcance inicial sin establecer decisiones técnicas, arquitectónicas ni de implementación.
 
@@ -295,7 +295,7 @@ Es una prioridad alta de MVP/V1 y resume información relevante del negocio. Deb
 
 Representa la necesidad funcional de que un negocio tenga múltiples usuarios y de que, en el futuro, distintos negocios similares utilicen BCM SOFT con información independiente.
 
-Inicialmente BCM operará con un único User real `Owner/Admin` con acceso total. V1 permanece preparado para múltiples Users, creación de usuarios, roles definidos en código y permisos por operación/sección. Un vendedor puede acceder a ventas y stock sin recibir automáticamente costos, ganancias o gastos. No se requiere un IAM dinámico.
+Inicialmente BCM puede operar con un único User real con role `Owner` y acceso total dentro de su Organization. `Owner` y `Admin` no son equivalentes: Owner conserva ownership y administración sensible; Admin conserva administración operativa sin ownership crítico. V1 permanece preparado para múltiples Users, roles definidos en código y permissions por operación/sección conforme a DOMAIN.md. Seller puede acceder a ventas y stock sin recibir automáticamente costos, margin/profit o gastos; Viewer sólo recibe lectura explícita. No se requiere un IAM dinámico.
 
 ### 9.13. Gastos
 

@@ -2,7 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-005 — Security Architecture
-**Última revisión:** BCM-012A — Customer Business Decisions Reconciliation
+**Última revisión:** BCM-TEN-002A — Durable RBAC V1 Product/Security Decisions
 
 Este documento define la arquitectura y los estándares de seguridad de BCM SOFT antes de implementar controles. Usa OWASP ASVS y OWASP Top 10 como referencias conceptuales, sin declarar cumplimiento formal.
 
@@ -220,26 +220,13 @@ Sanitizar input no sustituye encoding de output; ambos responden a contextos dis
 
 ## 15. Authorization Model
 
-V1 conserva roles aprobados en DATABASE.md: `Owner`, `Admin`, `Seller`, `Viewer`. No se introduce Manager ni IAM dinámico.
+La definición funcional y el mapping foundation autoritativo de `Owner`, `Admin`, `Seller` y `Viewer` están en DOMAIN.md §3.4. Owner y Admin no son equivalentes: Owner conserva ownership y administración sensible; Admin conserva administración operativa sin ownership crítico. Ninguno equivale a Platform Admin.
 
-Permissions se definen en código por operación, por ejemplo:
+El modelo es `Role → centralized set of semantic Permissions` y `Use case → requires Permission`. El mapping se define en código, se versiona en Git, es exhaustivo y se prueba. Toda permission ausente o desconocida deniega. Policies contextuales agregan ownership, estado y reglas de dominio; RBAC no autoriza por sí solo una transición inválida.
 
-- `inventory.read/create/update/adjust`;
-- `inventory.equipment.delete-unreferenced`, `inventory.equipment.write-off`;
-- `sales.read/create/confirm/cancel/correct`;
-- `sales.financials.cost.read`, `sales.financials.profit.read`;
-- `expenses.read/create/correct/void`;
-- `warranties.read/manage`;
-- `customers.read/manage`;
-- `suppliers.read/manage`;
-- `settings.manage`;
-- `memberships.read/manage`;
-- `audit.read`;
-- `files.read/upload/delete`.
+El catálogo foundation se limita a las permissions de Organization, Memberships, invitations y audit aprobadas en DOMAIN.md. Inventory, Sales, Customers, Suppliers, Warranties, Files y Financial incorporan sus permissions, mapping y tests junto con cada feature; sus nombres no forman parte anticipadamente de este catálogo.
 
-El mapping role→permission se centraliza, versiona y prueba. Owner no equivale a Platform Admin. Policies contextuales agregan ownership, estado y reglas de dominio; RBAC no autoriza por sí solo una transición inválida.
-
-BCM inicia con un único User real Owner/Admin con acceso total dentro de su Organization. La preparación multi-user no cambia el modelo: Owner/Admin administran Memberships conforme a invariantes; Seller puede recibir ventas y stock sin obtener por defecto costos, Gross Profit, Business Result o Expenses; Viewer solo ve secciones concedidas. La visibilidad de navegación es UX, nunca reemplaza enforcement backend. No se crean custom roles ni un IAM dinámico.
+TEN-002 mantendrá `TenantContext` intacto y construirá dentro del authority/persistence boundary un `AuthorizationContext` separado, server-created e immutable, con tenant, role, `authorizationVersion` y permissions. Ninguno de esos valores proviene de frontend, cookie, headers o request body.
 
 ## 16. Deny By Default
 
@@ -321,6 +308,8 @@ Prisma y SQL parametrizado son obligatorios. `$queryRawUnsafe`, `$executeRawUnsa
 
 La API devuelve errores públicos estables con status, code, mensaje seguro y correlation ID. Nunca stack, SQL, query parameters sensibles, connection string, secrets, rutas locales, password/session/token hashes ni internals. El log interno conserva diagnóstico sanitizado; errores de infraestructura se traducen sin ocultar el fallo operacional al monitoreo.
 
+El contrato conceptual de autorización distingue `401 AUTHENTICATION_REQUIRED` para Authentication inválida, `403 TENANT_ACCESS_DENIED` para autoridad tenant inválida y `403 AUTHORIZATION_DENIED` para tenant válido sin permission o con autorización stale. Ninguna respuesta expone role, `authorizationVersion`, required permission ni Membership status. El mapping HTTP ejecutable pertenece a la etapa técnica de TEN-002.
+
 ## 27. Resource Enumeration
 
 - login/recovery/invitation usan respuestas genéricas y tiempo comparable;
@@ -389,7 +378,7 @@ MFA se difiere en V1, con riesgo residual de credential theft mitigado por sesio
 
 ## 36. Account Provisioning
 
-V1 usa alta administrativa e invitaciones. Invitation token es CSPRNG, hash-at-rest, expirable (default propuesto 24 horas), single-use, purpose/Organization/email bound y revocable. Aceptarlo no permite elegir Organization, role ni email distintos; esos valores provienen de la invitación autorizada. Crear/revocar invitación requiere `memberships.manage` y Audit Record.
+V1 usa alta administrativa e invitaciones. Invitation token es CSPRNG, hash-at-rest, expirable (default propuesto 24 horas), single-use, purpose/Organization/email bound y revocable. Aceptarlo no permite elegir Organization, role ni email distintos; esos valores provienen de la invitación autorizada. Crear/revocar invitación requiere `invitations.manage` y Audit Record. Owner puede invitar cualquier role permitido por policy; Admin únicamente Seller o Viewer; Seller y Viewer no gestionan invitations.
 
 ## 37. Organization Switching
 
@@ -397,7 +386,15 @@ Current Organization se guarda server-side en Session para UX y cambia solo medi
 
 ## 38. Permission Changes
 
-Membership conserva `authorization_version` o equivalente. Cambiar role/status incrementa esa versión y genera audit. Requests sensibles cargan Membership activa y comparan versión; V1 puede hacerlo en cada request tenant-owned por su escala. Caches futuros deben invalidarse o tener TTL corto fail-closed. Revocar Membership surte efecto inmediato para esa Organization; deshabilitar User revoca todas sus sesiones.
+`organization_memberships.authorization_version` es una revisión monotónica local de la Membership, comienza en `1` e incrementa atómicamente ante todo cambio persistido que pueda alterar acceso efectivo: role, status o futuros permission overrides. El cambio y su Audit Record ocurren en la misma transacción. Cambiar el mapping code-defined mediante deployment no obliga a incrementar todas las Memberships.
+
+Cada request tenant-owned compara `Session.current_membership_authorization_version` con la versión vigente de la Membership. Un mismatch significa autorización stale y falla cerrado: no usa permisos anteriores, no refresca silenciosamente el snapshot y no actualiza automáticamente la Session. La Session requiere renovación explícita conforme al flujo que defina TEN-002. Esta política se aplica tanto a reducciones como a aumentos de privilegio; una Session anterior nunca obtiene acceso nuevo automáticamente.
+
+Membership `Suspended` o `Revoked` siempre deniega, aunque la versión coincida. Status continúa siendo la autoridad primaria y el mismatch es una invalidación adicional. Todas las Sessions con un snapshot anterior quedan stale por comparación en cada request; correctness no depende de actualizarlas una por una.
+
+Role, versión y permissions se resuelven exclusivamente desde la Membership de la Organization seleccionada. No existe role global del User ni se reutiliza autoridad entre Organizations.
+
+Las futuras mutaciones de role/status deben ser transaccionales, evitar self-escalation, preservar al menos un Owner Active, incrementar la versión atómicamente y producir audit durable. El audit incluye actor interno, target Membership, Organization, previous/new role o status según policy sanitizada, cambio de versión y correlation/request ID; nunca tokens, cookies ni secrets. TEN-002A no implementa esas mutaciones ni el audit store.
 
 ## 39. Sensitive Actions
 
@@ -513,6 +510,8 @@ Son incidentes de seguridad/integridad: vender Equipment dos veces, stock negati
 
 Requests paralelos o repetidos pueden ser intencionales. Los locks por fila, updates condicionales, orden estable de locks, CHECK/UNIQUE parciales, transacciones y failure atomicity de DATABASE.md son controles de seguridad. La permission y tenant context se validan dentro de la misma unidad transaccional cuando el tiempo entre check y use pueda cambiar el resultado.
 
+El enforcement autoritativo de permission y `authorizationVersion` ocurre dentro del mismo `TenantPersistenceScope` y transaction boundary que la operación tenant-owned. Un decorator o guard HTTP puede actuar como primera barrera, pero Application/persistence conserva el control real. El orden compatible con TEN-001 es Session → User → Membership → Organization advisory → tenant rows. Operaciones multi-Membership más complejas requieren un caso real y review separado antes de alterar ese protocolo.
+
 ## 57. Idempotency Security
 
 Keys son CSPRNG o suficientemente impredecibles, tenant-scoped y operation-scoped; se asocian al hash canónico del request y resultado seguro. Reusar key con payload/operación incompatible es conflicto. Expiry/cleanup no permite repetir una operación mientras su efecto siga ambiguo. La key no autentica, no autoriza y nunca cambia Current Organization.
@@ -549,7 +548,7 @@ Database integration tests con el role runtime real demuestran que Organization 
 
 ## 63. Authorization Testing
 
-Por operación sensible: caso permitido; sin Authentication → 401; autenticado sin permission → 403; recurso de otro tenant → 404/no accesible; role/Membership removidos → acceso desaparece; Organization switch inválido → rechazo; campos server-controlled → rechazo/ignorados según contrato; last Owner y acciones destructivas siguen reglas específicas.
+Por operación sensible: caso permitido; sin Authentication → 401; autenticado sin permission → 403; recurso de otro tenant → 404/no accesible; role/Membership removidos → acceso desaparece; Organization switch inválido → rechazo; campos server-controlled → rechazo/ignorados según contrato; last Owner y acciones destructivas siguen reglas específicas. Probar mismatch fail-closed sin snapshot auto-refresh, Admin→Viewer y Viewer→Admin con renovación requerida, múltiples Sessions stale, roles distintos en múltiples Organizations y enforcement dentro del mismo persistence scope.
 
 ## 64. Authentication Testing
 
@@ -607,7 +606,7 @@ V1 **no crea Platform Super Admin universal**. Roles Owner/Admin pertenecen a un
 | Manage Warranty | permission específica, coverage/expiry allowlist, tenant ownership, audit |
 | Deactivate Organization/User | permiso elevado, impacto/sesiones, confirmación, reason, audit |
 | Delete file | ownership de entidad, lifecycle/retention, idempotency, audit |
-| Change Membership role/status | `memberships.manage`, no self-escalation, invariantes Owner, version bump, audit |
+| Change Membership role/status | `memberships.manage` para Seller/Viewer; `memberships.manage_owner` para Owner; no self-escalation, último Owner Active, version bump, transaction y audit |
 
 La confirmación visual nunca reemplaza control backend.
 
@@ -648,6 +647,7 @@ Session, recovery, invitation y otros bearer tokens usan CSPRNG, al menos 128 bi
 | SEC-DEC-019 | lockfile, audit y review supply-chain | Accepted | reproducibilidad y riesgo de paquetes | CI/package manager definido |
 | SEC-DEC-020 | financial visibility separated by semantic permission | Accepted | Seller puede operar ventas/stock sin costos, profit o gastos | nueva matriz de roles o reporting |
 | SEC-DEC-021 | corrections, voids and write-offs require dedicated permissions | Accepted | acciones históricas/destructivas necesitan least privilege, reason y audit | implementación de cada capability |
+| SEC-DEC-022 | authorization-version mismatch falla cerrado y exige renovación explícita, sin snapshot auto-refresh | Accepted | impide conservar o adquirir privilegios con una Session stale | cambio del modelo de renovación/session o necesidad UX demostrada |
 
 ## 77. Security Controls Matrix
 

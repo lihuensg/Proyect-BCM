@@ -283,26 +283,33 @@ Audit es un port/capability del módulo Audit invocado por Application. Una acci
 
 No interceptor genérico que audite todo request o capture DTOs completos. Query access sensible/export puede auditarse tras una policy explícita. Controllers no construyen Audit Records.
 
-## 32. Authentication context
+## 32. Authentication and authorization contexts
 
-Tipo application-level inmutable:
+Los contextos application-level son inmutables y conservan responsabilidades separadas:
 
 ```text
-AuthenticatedContext
+AuthenticatedIdentity
+- userId
+- sessionId
+
+TenantContext
 - userId
 - sessionId
 - organizationId
 - membershipId
+
+AuthorizationContext
+- tenant
 - role
 - authorizationVersion
-- correlationId
+- permissions
 ```
 
-Puede existir un contexto pre-auth mínimo para login/recovery. Presentation construye el contexto desde providers ya validados; Application recibe este value, nunca Express/Nest request, cookie raw ni headers. Cada use case declara si requiere Organization.
+`TenantContext` permanece como autoridad tenant sin semántica RBAC. `AuthorizationContext` se construye posteriormente dentro del authority/persistence boundary desde la Membership server-side validada; no proviene de Presentation, Express/Nest request, cookie raw, headers ni otros campos del cliente. Correlation/request ID pertenece al contexto técnico de request y no concede autoridad. Cada use case declara si requiere Organization y permission.
 
 ## 33. Authorization
 
-Permissions centralizadas (`sales.cancel`, `inventory.adjust`, etc.) se resuelven desde role/Membership; no `if role === Owner` dispersos. Un authorization port ofrece `requirePermission(context, permission)` y policies contextuales verifican ownership/estado.
+Permissions centralizadas —por ejemplo las foundation `organization.read` o `memberships.manage` aprobadas en DOMAIN.md— se resuelven desde role/Membership; no `if role === Owner` dispersos. Cada feature futura define sus propios códigos antes de implementarlos. Un authorization port ofrece `requirePermission(context, permission)` y policies contextuales verifican ownership/estado.
 
 Deny-by-default: permission desconocida, context incompleto, version stale o policy error deniega. El use case autoriza aunque controller/guard ya lo hizo. Guards sirven como primera barrera HTTP, no como única autoridad.
 

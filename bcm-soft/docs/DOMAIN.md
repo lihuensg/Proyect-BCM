@@ -2,7 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-002 — Domain Definition  
-**Última actualización:** BCM-012A — Customer Business Decisions Reconciliation
+**Última actualización:** BCM-TEN-002A — Durable RBAC V1 Product/Security Decisions
 
 Este documento define cómo funciona el negocio de BCM SOFT. Traduce la definición funcional de `PRODUCT.md` a conceptos, relaciones, estados, transiciones, operaciones, invariantes y eventos de dominio, sin establecer decisiones técnicas o de implementación.
 
@@ -103,17 +103,53 @@ La información de un negocio no forma parte funcionalmente de otro negocio. Una
 3. El historial de un negocio debe permanecer independiente del historial de cualquier otro.
 4. El acceso se define mediante roles y permissions por operación; los mecanismos técnicos de aislamiento pertenecen a SECURITY y DATABASE.
 
-### 3.4. User
+### 3.4. User, Membership roles and permissions
 
 Un **User** es una persona que actúa en nombre de un negocio. Sus acciones comerciales siempre ocurren dentro del contexto funcional de ese negocio.
 
-Los tipos iniciales son Owner, Admin, Seller y Viewer. Inicialmente existe un único User real Owner/Admin con acceso total, sin impedir múltiples Users futuros. Los roles son definidos en código y las permissions se asignan por operación/sección; no se crea un IAM dinámico.
+Los roles V1 son `Owner`, `Admin`, `Seller` y `Viewer`. Son roles distintos, definidos en código y asignados por Membership; no existe un role global del User. Una misma persona puede ser, por ejemplo, Admin en una Organization y Viewer en otra. No se crean roles configurables, custom roles ni un IAM dinámico en V1.
 
 - Un usuario puede originar operaciones y acciones auditables.
 - Una acción sensible debe poder atribuirse al usuario que la realizó cuando corresponda.
 - Un usuario no adquiere acceso funcional a la información de otro negocio por el solo hecho de existir en BCM SOFT.
-- Un Seller puede operar ventas y stock sin poder leer costos, ganancias o gastos salvo permission explícita.
 - La posibilidad de que una persona participe en más de un negocio permanece sujeta a Membership y contexto autorizado.
+
+#### Roles V1
+
+- **Owner:** máximo nivel de administración dentro de una Organization. Conserva ownership y administración sensible y puede gestionar `Owner`, `Admin`, `Seller` y `Viewer` conforme a las invariantes de ownership.
+- **Admin:** administración operativa amplia y configuración ordinaria, sin ownership crítico. Puede gestionar e invitar únicamente `Seller` y `Viewer`; no puede crear, promover, degradar, suspender ni revocar un Owner, ni elevar su propio role.
+- **Seller:** role operativo para las funcionalidades comerciales de ventas y stock que cada feature habilite. No administra Memberships, roles ni configuración crítica y no accede por defecto a costos, margin/profit ni gastos.
+- **Viewer:** role de solo lectura sobre secciones que cada feature conceda explícitamente. No crea, actualiza, elimina ni confirma; tampoco administra Memberships, settings críticos, costos, margin/profit o gastos.
+
+Owner y Admin no son equivalentes: Owner posee ownership y administración sensible; Admin conserva administración operativa sin ownership. Estas reglas no crean una jerarquía implícita fuera de las permissions y policies expresamente definidas.
+
+#### Membership management and ownership invariants
+
+Una Organization puede tener múltiples Owners, pero debe conservar al menos un Owner con Membership `Active`. Ninguna operación puede degradar, suspender o revocar al último Owner activo ni dejar la Organization sin uno. Esta invariante también limita al propio Owner y debe aplicarse transaccionalmente cuando se implementen las mutaciones de Membership.
+
+Ningún User puede usar una mutación sobre su propia Membership para elevar privilegios. Admin no puede promoverse a Owner; Seller y Viewer no pueden modificar su propio role. Owner tampoco obtiene un bypass de la invariante del último Owner.
+
+Para invitations, Owner puede invitar cualquier role permitido por estas policies; Admin puede invitar únicamente Seller o Viewer; Seller y Viewer no gestionan invitations.
+
+#### Permission model and foundation catalog
+
+V1 adopta `Role → centralized set of semantic Permissions` y `Use case → requires Permission`. Las permissions son code-defined, versionadas en Git, server-side authoritative, exhaustivas en el mapping y deny-by-default. Los casos de uso no dispersan comprobaciones directas de role.
+
+El catálogo foundation inicial y su mapping aprobado son:
+
+| Permission | Owner | Admin | Seller | Viewer |
+| --- | --- | --- | --- | --- |
+| `organization.read` | Sí | Sí | Sí | Sí |
+| `organization.settings.manage` | Sí | Sí | No | No |
+| `memberships.read` | Sí | Sí | No | No |
+| `memberships.manage` | Sí | Sí, solo Seller/Viewer | No | No |
+| `memberships.manage_owner` | Sí, sujeto a invariantes | No | No | No |
+| `invitations.manage` | Sí | Sí, solo Seller/Viewer | No | No |
+| `audit.read` | Sí | Sí | No | No |
+
+`organization.settings.manage` cubre configuración operativa ordinaria; no concede ownership crítico. Toda configuración futura con mayor sensibilidad requiere una permission dedicada y su propia decisión de feature.
+
+`organization.read` no concede acceso a toda la información sensible futura. Inventory, Sales, Customers, Suppliers, Warranties, Files y Financial definirán sus permissions semánticas, mapping y tests deny-by-default al implementar cada feature; no forman parte del catálogo foundation.
 
 ## 4. Equipment
 
@@ -1409,7 +1445,7 @@ Los eventos de devolución continúan como conceptos de una capacidad futura. To
 | `DOM-DEC-031` | Bajo stock | `Confirmed` | Cada producto por cantidad puede configurar mínimo; existe alerta cuando stock actual es igual o inferior al mínimo. | Medium | BCM-012A |
 | `DOM-DEC-032` | Dashboard | `Confirmed` | Prioridad alta V1; filtros día/semana/mes/rango y baseline de Revenue, Gross Profit, Expenses, Business Result, cantidades, best sellers y margen por producto/total en ARS/USD. | High | BCM-012A |
 | `DOM-DEC-033` | Auditoría | `Pending` | Además de cancelaciones y ajustes, ¿qué acciones, datos, motivos y plazos de conservación son obligatorios? | High | BCM-005 y estándares posteriores |
-| `DOM-DEC-034` | Usuarios y permisos | `Confirmed` | Un Owner/Admin real inicia con acceso total; el RBAC code-defined soporta múltiples Users. Seller puede operar ventas/stock sin costos, profit o gastos salvo permission explícita. | High | BCM-012A / BCM-005 |
+| `DOM-DEC-034` | Usuarios y permisos | `Confirmed` | Owner y Admin no son equivalentes: Owner conserva ownership y administración sensible; Admin gestiona la operación y únicamente Seller/Viewer. Puede haber múltiples Owners, pero siempre debe quedar al menos uno Active. Seller opera features comerciales expresamente habilitadas sin acceso financiero por defecto; Viewer sólo recibe lectura explícita. El catálogo foundation y su mapping están definidos en §3.4. | High | BCM-012A / BCM-005 / BCM-TEN-002A |
 | `DOM-DEC-035` | Independencia de negocios | `Pending` | ¿Qué reglas funcionales adicionales rigen usuarios que accedan a más de un negocio? | High | BCM-005 |
 | `DOM-DEC-036` | Lista de precios | `Confirmed` | Prioridad V1: texto ordenado listo para copiar/WhatsApp. PDF/imagen e integración directa quedan `Deferred`. | Low | BCM-012A |
 | `DOM-DEC-037` | Estados de Equipment | `Pending` | ¿Qué transiciones involucran `Archived` y cuáles son los resultados posibles de `Under Review`? | High | Antes de BCM-003 |
