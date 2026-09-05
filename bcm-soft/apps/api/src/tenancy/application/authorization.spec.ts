@@ -9,6 +9,7 @@ import {
   isAuthorizationVersion,
   isMembershipRole,
   isPermission,
+  isPermissionRequirement,
   MEMBERSHIP_ROLES,
   type AuthorizationContext,
   type AuthorizationContextResolution,
@@ -472,6 +473,16 @@ describe("AuthorizationPolicy", () => {
     expect(() =>
       Reflect.apply(definePermissionRequirement, undefined, ["*"]),
     ).toThrow("A known Permission is required.");
+  });
+
+  it("recognizes only a valid runtime permission requirement", () => {
+    expect(
+      isPermissionRequirement(definePermissionRequirement("organization.read")),
+    ).toBe(true);
+    expect(isPermissionRequirement({ requiredPermission: "unknown" })).toBe(
+      false,
+    );
+    expect(isPermissionRequirement(undefined)).toBe(false);
   });
 });
 

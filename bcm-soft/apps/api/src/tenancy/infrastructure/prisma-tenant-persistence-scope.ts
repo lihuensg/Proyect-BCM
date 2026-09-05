@@ -3,9 +3,21 @@ import type { Clock } from "../../identity/application/clock.js";
 import { isSessionExpired } from "../../identity/domain/session-policy.js";
 import { validate, version } from "uuid";
 
+import {
+  AuthorizationPolicy,
+  FailClosedAuthorizationContextResolver,
+  isPermissionRequirement,
+  type AuthorizationContext,
+  type MembershipAuthorizationSnapshot,
+  type PermissionRequirement,
+} from "../application/authorization.js";
 import type { TenantContext } from "../application/tenant-authority.js";
 import {
+  type AuthorizationPersistenceDenialReason,
+  type AuthorizedTenantOperation,
+  type AuthorizedTenantPersistenceResult,
   TenantPersistenceError,
+  type TenantFoundationPersistenceScope,
   type TenantPersistenceResult,
   type TenantPersistenceScope,
   TenantRepositoryScopeLease,
@@ -27,14 +39,37 @@ type SessionAuthorityRow = Readonly<{
 }>;
 
 type MembershipAuthorityRow = Readonly<{
+  authorizationVersion: bigint;
   membershipId: string;
   organizationId: string;
+  role: string;
   status: string;
   userId: string;
 }>;
 
+type ValidatedTenantAuthority = Readonly<{
+  membership: MembershipAuthorityRow;
+  session: SessionAuthorityRow;
+  status: "validated";
+}>;
+
+type TenantAuthorityValidation =
+  ValidatedTenantAuthority | Readonly<{ status: "denied" }>;
+
+type AuthorizedPersistenceDenial = Exclude<
+  AuthorizedTenantPersistenceResult<never>,
+  { status: "executed" }
+>;
+
+type TransactionAuthorization =
+  | Readonly<{ status: "authorized"; context: AuthorizationContext }>
+  | AuthorizedPersistenceDenial;
+
 const DENIED_RESULT: TenantPersistenceResult<never> = Object.freeze({
   status: "denied",
+});
+const TENANT_DENIED_RESULT: AuthorizedPersistenceDenial = Object.freeze({
+  status: "tenant-denied",
 });
 
 export const ORGANIZATION_AUTHORITY_LOCK_NAMESPACE =
@@ -47,13 +82,48 @@ class TenantAuthorityChangedDuringOperationError extends Error {
   }
 }
 
+class AuthorizationChangedDuringOperationError extends Error {
+  constructor(readonly result: AuthorizedPersistenceDenial) {
+    super("Authorization changed during the persistence operation.");
+    this.name = "AuthorizationChangedDuringOperationError";
+  }
+}
+
+function authorizationDenied(
+  reason: AuthorizationPersistenceDenialReason,
+): AuthorizedPersistenceDenial {
+  return Object.freeze({ status: "authorization-denied", reason });
+}
+
+async function resolveAuthorizationContext(
+  tenantContext: TenantContext,
+  membership: MembershipAuthorityRow,
+): Promise<
+  Awaited<ReturnType<FailClosedAuthorizationContextResolver["resolve"]>>
+> {
+  const snapshot: MembershipAuthorizationSnapshot = Object.freeze({
+    status: "available",
+    userId: membership.userId,
+    sessionId: tenantContext.sessionId,
+    organizationId: membership.organizationId,
+    membershipId: membership.membershipId,
+    role: membership.role,
+    authorizationVersion: membership.authorizationVersion,
+  });
+  return new FailClosedAuthorizationContextResolver({
+    loadFor: () => Promise.resolve(snapshot),
+  }).resolve(tenantContext);
+}
+
 function isUuidV7(identifier: string): boolean {
   return validate(identifier) && version(identifier) === 7;
 }
 
-export class PrismaTenantPersistenceScope<
-  Repositories,
-> implements TenantPersistenceScope<Repositories> {
+export class PrismaTenantPersistenceScope<Repositories>
+  implements
+    TenantPersistenceScope<Repositories>,
+    TenantFoundationPersistenceScope<Repositories>
+{
   constructor(
     private readonly client: PrismaClient,
     private readonly clock: Clock,
@@ -113,6 +183,73 @@ export class PrismaTenantPersistenceScope<
     }
   }
 
+  async runAuthorized<Result>(
+    tenantContext: TenantContext,
+    requirement: PermissionRequirement,
+    operation: (
+      scope: AuthorizedTenantOperation<Repositories>,
+    ) => Promise<Result>,
+  ): Promise<AuthorizedTenantPersistenceResult<Result>> {
+    if (!this.hasValidIdentifiers(tenantContext)) {
+      return TENANT_DENIED_RESULT;
+    }
+    if (!isPermissionRequirement(requirement)) {
+      return authorizationDenied("invalid-permission-requirement");
+    }
+    const requiredPermission = requirement.requiredPermission;
+
+    try {
+      return await this.client.$transaction(async (transaction) => {
+        const authorization = await this.lockAndAuthorize(
+          transaction,
+          tenantContext,
+          requiredPermission,
+        );
+        if (authorization.status !== "authorized") return authorization;
+
+        const lease = new TenantRepositoryScopeLease();
+        try {
+          const repositories = this.createRepositories(
+            transaction,
+            tenantContext.organizationId,
+            lease,
+          );
+          const value = await operation(
+            Object.freeze({
+              authorization: authorization.context,
+              repositories,
+            }),
+          );
+
+          // Session is held FOR UPDATE and Membership/User are held FOR SHARE
+          // until commit, so their validated authority cannot change. The
+          // advisory lock serializes compliant Organization changes; this final
+          // read also detects an inactivation that bypassed that protocol.
+          if (
+            !(await this.isOrganizationActive(
+              transaction,
+              tenantContext.organizationId,
+            ))
+          ) {
+            throw new AuthorizationChangedDuringOperationError(
+              TENANT_DENIED_RESULT,
+            );
+          }
+
+          return Object.freeze({ status: "executed" as const, value });
+        } finally {
+          lease.close();
+        }
+      });
+    } catch (error: unknown) {
+      if (error instanceof AuthorizationChangedDuringOperationError) {
+        return error.result;
+      }
+      if (error instanceof TenantPersistenceError) throw error;
+      throw new TenantPersistenceError(error);
+    }
+  }
+
   private hasValidIdentifiers(context: TenantContext): boolean {
     return (
       isUuidV7(context.userId) &&
@@ -126,6 +263,56 @@ export class PrismaTenantPersistenceScope<
     transaction: Prisma.TransactionClient,
     context: TenantContext,
   ): Promise<boolean> {
+    return (
+      (await this.lockAndLoadTenantAuthority(transaction, context)).status ===
+      "validated"
+    );
+  }
+
+  private async lockAndAuthorize(
+    transaction: Prisma.TransactionClient,
+    context: TenantContext,
+    requiredPermission: unknown,
+  ): Promise<TransactionAuthorization> {
+    const authority = await this.lockAndLoadTenantAuthority(
+      transaction,
+      context,
+    );
+    if (authority.status === "denied") return TENANT_DENIED_RESULT;
+
+    if (
+      authority.session.currentMembershipAuthorizationVersion !==
+      authority.membership.authorizationVersion
+    ) {
+      return authorizationDenied("stale-authorization");
+    }
+
+    const resolution = await resolveAuthorizationContext(
+      context,
+      authority.membership,
+    );
+    if (resolution.status === "denied") {
+      return resolution.reason === "unknown-role"
+        ? authorizationDenied("invalid-membership-role")
+        : authorizationDenied("stale-authorization");
+    }
+
+    const decision = new AuthorizationPolicy().authorize(
+      resolution.context,
+      requiredPermission,
+    );
+    return decision.status === "allowed"
+      ? Object.freeze({
+          status: "authorized",
+          context: resolution.context,
+        })
+      : authorizationDenied("permission-denied");
+  }
+
+  private async lockAndLoadTenantAuthority(
+    transaction: Prisma.TransactionClient,
+    context: TenantContext,
+  ): Promise<TenantAuthorityValidation> {
     // Stable order: Session FOR UPDATE -> User FOR SHARE -> Membership FOR
     // SHARE -> Organization advisory lock -> tenant-owned rows. Session and
     // Membership mutations serialize on their rows. Organization mutations
@@ -133,10 +320,10 @@ export class PrismaTenantPersistenceScope<
     // deliberately has SELECT-only access to organizations.
     const session = await this.lockSession(transaction, context);
     if (session === undefined || !this.isSessionAuthorized(session, context)) {
-      return false;
+      return Object.freeze({ status: "denied" });
     }
     if (!(await this.lockActiveUser(transaction, context.userId))) {
-      return false;
+      return Object.freeze({ status: "denied" });
     }
 
     const membership = await this.lockMembership(transaction, context);
@@ -147,11 +334,17 @@ export class PrismaTenantPersistenceScope<
       membership.organizationId !== context.organizationId ||
       membership.membershipId !== context.membershipId
     ) {
-      return false;
+      return Object.freeze({ status: "denied" });
     }
 
     await this.lockOrganizationAuthority(transaction, context.organizationId);
-    return this.isOrganizationActive(transaction, context.organizationId);
+    if (
+      !(await this.isOrganizationActive(transaction, context.organizationId))
+    ) {
+      return Object.freeze({ status: "denied" });
+    }
+
+    return Object.freeze({ status: "validated", session, membership });
   }
 
   private async lockSession(
@@ -226,9 +419,11 @@ export class PrismaTenantPersistenceScope<
   ): Promise<MembershipAuthorityRow | undefined> {
     const rows = await transaction.$queryRaw<MembershipAuthorityRow[]>`
       SELECT
+        membership.authorization_version AS "authorizationVersion",
         membership.id AS "membershipId",
         membership.user_id AS "userId",
         membership.organization_id AS "organizationId",
+        membership.role,
         membership.status
       FROM organization_memberships AS membership
       WHERE membership.id = ${context.membershipId}::uuid

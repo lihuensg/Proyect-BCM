@@ -31,7 +31,7 @@ import type {
 import { TenantAuthorityPersistenceError } from "../../../src/tenancy/application/tenant-authority.js";
 import {
   TenantPersistenceError,
-  type TenantPersistenceScope,
+  type TenantFoundationPersistenceScope,
 } from "../../../src/tenancy/application/tenant-persistence-scope.js";
 import { TenantAuthorityGuard } from "../../../src/tenancy/presentation/tenant-authority.guard.js";
 import { tenantAccessDenied } from "../../../src/tenancy/presentation/tenant-http-errors.js";
@@ -79,7 +79,7 @@ class TenantBoundaryProbeUseCase {
   lastContext: TenantContext | undefined;
 
   constructor(
-    private readonly persistence: TenantPersistenceScope<TenantRuntimeRepositories>,
+    private readonly persistence: TenantFoundationPersistenceScope<TenantRuntimeRepositories>,
   ) {}
 
   async execute(context: TenantContext): Promise<TenantProbeResponse> {
@@ -617,7 +617,7 @@ describe("Tenant authority Nest/HTTP boundary with PostgreSQL", () => {
     await createMembership(userId, organizationId);
     const session = await createAuthenticatedSession(userId);
     const persistence = app.get<
-      TenantPersistenceScope<TenantRuntimeRepositories>
+      TenantFoundationPersistenceScope<TenantRuntimeRepositories>
     >(TENANT_PERSISTENCE_SCOPE);
     const persistenceSpy = vi
       .spyOn(persistence, "run")

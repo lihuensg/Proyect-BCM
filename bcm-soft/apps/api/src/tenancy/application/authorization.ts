@@ -72,6 +72,17 @@ export function definePermissionRequirement<
   return Object.freeze({ requiredPermission });
 }
 
+export function isPermissionRequirement(
+  value: unknown,
+): value is PermissionRequirement {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "requiredPermission" in value &&
+    isPermission(value.requiredPermission)
+  );
+}
+
 const AUTHORIZATION_CONTEXT_AUTHORITY = Symbol("AuthorizationContextAuthority");
 
 export type AuthorizationContext = Readonly<{

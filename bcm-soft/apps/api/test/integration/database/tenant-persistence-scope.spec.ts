@@ -7,6 +7,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadServerConfig } from "../../../src/config/server-config.js";
 import { PrismaClientLifecycle } from "../../../src/infrastructure/database/prisma-client-lifecycle.js";
 import { generateUuidV7 } from "../../../src/infrastructure/identifiers/uuid-v7.js";
+import {
+  definePermissionRequirement,
+  type MembershipRole,
+} from "../../../src/tenancy/application/authorization.js";
 import type { TenantContext } from "../../../src/tenancy/application/tenant-authority.js";
 import {
   FailClosedTenantAuthorityResolver,
@@ -31,6 +35,12 @@ type AuthorityFixture = Readonly<{
   resourceId: string;
   sessionId: string;
   userId: string;
+}>;
+
+type AuthorityFixtureOptions = Readonly<{
+  membershipVersion?: bigint;
+  role?: MembershipRole;
+  sessionVersion?: bigint;
 }>;
 
 type ProbeReadResult =
@@ -79,6 +89,11 @@ describe("PostgreSQL tenant persistence scope", () => {
   });
   const now = new Date("2026-08-30T20:00:00.000Z");
   const clock = new MutableClock(now);
+  const ORGANIZATION_READ = definePermissionRequirement("organization.read");
+  const MEMBERSHIPS_MANAGE = definePermissionRequirement("memberships.manage");
+  const MEMBERSHIPS_MANAGE_OWNER = definePermissionRequirement(
+    "memberships.manage_owner",
+  );
 
   function createProbeRepository(
     transaction: Prisma.TransactionClient,
@@ -157,19 +172,23 @@ describe("PostgreSQL tenant persistence scope", () => {
     userId: string,
     organizationId: string,
     status: MembershipStatus = "Active",
+    role: MembershipRole = "Viewer",
+    authorizationVersion = 1n,
   ) {
     const membershipId = generateUuidV7();
     await fixtureSql.query(
       `INSERT INTO organization_memberships
         (id, organization_id, user_id, role, status, authorization_version,
          activated_at, revoked_at, created_at, updated_at)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, 'Viewer', $4, 1,
-               $5, $6, $5, $5)`,
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6,
+               $7, $8, $7, $7)`,
       [
         membershipId,
         organizationId,
         userId,
+        role,
         status,
+        authorizationVersion,
         now,
         status === "Revoked" ? now : null,
       ],
@@ -177,20 +196,25 @@ describe("PostgreSQL tenant persistence scope", () => {
     return membershipId;
   }
 
-  async function createSession(userId: string, organizationId: string) {
+  async function createSession(
+    userId: string,
+    organizationId: string,
+    authorizationVersion = 1n,
+  ) {
     const sessionId = generateUuidV7();
     await fixtureSql.query(
       `INSERT INTO sessions
         (id, token_hash, user_id, current_organization_id,
          current_membership_authorization_version, expires_at, revoked_at,
          last_seen_at, created_at)
-       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, 1,
-               $5, NULL, $6, $6)`,
+       VALUES ($1::uuid, $2, $3::uuid, $4::uuid, $5,
+               $6, NULL, $7, $7)`,
       [
         sessionId,
         randomBytes(32),
         userId,
         organizationId,
+        authorizationVersion,
         new Date(now.getTime() + 60 * 60_000),
         now,
       ],
@@ -229,11 +253,24 @@ describe("PostgreSQL tenant persistence scope", () => {
     return resolution.context;
   }
 
-  async function createFixture(): Promise<AuthorityFixture> {
+  async function createFixture(
+    options: AuthorityFixtureOptions = {},
+  ): Promise<AuthorityFixture> {
     const userId = await createUser();
     const organizationId = await createOrganization();
-    const membershipId = await createMembership(userId, organizationId);
-    const sessionId = await createSession(userId, organizationId);
+    const membershipVersion = options.membershipVersion ?? 1n;
+    const membershipId = await createMembership(
+      userId,
+      organizationId,
+      "Active",
+      options.role ?? "Viewer",
+      membershipVersion,
+    );
+    const sessionId = await createSession(
+      userId,
+      organizationId,
+      options.sessionVersion ?? membershipVersion,
+    );
     const resourceId = generateUuidV7();
     await fixtureSql.query(
       `INSERT INTO test_tenant_persistence_probe
@@ -278,6 +315,18 @@ describe("PostgreSQL tenant persistence scope", () => {
     const value = result.rows[0]?.value;
     if (value === undefined) throw new Error("The test probe is missing.");
     return value;
+  }
+
+  async function waitForClientLock(client: Client): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const state = await fixtureSql.query<{ is_blocked: boolean }>(
+        `SELECT cardinality(pg_blocking_pids($1)) > 0 AS is_blocked`,
+        [client.processID],
+      );
+      if (state.rows[0]?.is_blocked === true) return;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new Error("The competing transaction did not wait for the lock.");
   }
 
   beforeAll(async () => {
@@ -659,5 +708,488 @@ describe("PostgreSQL tenant persistence scope", () => {
     });
     await revocation;
     await expect(probeValue(fixture.resourceId)).resolves.toBe("operation-won");
+  });
+
+  it("executes an Admin operation with matching version and permission", async () => {
+    const fixture = await createFixture({
+      role: "Admin",
+      membershipVersion: 5n,
+    });
+
+    const result = await scope.runAuthorized(
+      fixture.context,
+      MEMBERSHIPS_MANAGE,
+      async ({ authorization, repositories }) => ({
+        role: authorization.role,
+        version: authorization.authorizationVersion,
+        tenant: authorization.tenant,
+        write: await repositories.updateValue(
+          fixture.resourceId,
+          "authorized-admin",
+        ),
+      }),
+    );
+
+    expect(result).toEqual({
+      status: "executed",
+      value: {
+        role: "Admin",
+        version: 5n,
+        tenant: fixture.context,
+        write: { status: "updated" },
+      },
+    });
+    await expect(probeValue(fixture.resourceId)).resolves.toBe(
+      "authorized-admin",
+    );
+  });
+
+  it("denies an Admin permission that is not explicitly mapped", async () => {
+    const fixture = await createFixture({ role: "Admin" });
+    const callback = vi.fn(async () => "must-not-run");
+
+    await expect(
+      scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE_OWNER, callback),
+    ).resolves.toEqual({
+      status: "authorization-denied",
+      reason: "permission-denied",
+    });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("executes organization.read for Viewer", async () => {
+    const fixture = await createFixture({ role: "Viewer" });
+
+    await expect(
+      scope.runAuthorized(
+        fixture.context,
+        ORGANIZATION_READ,
+        async ({ authorization, repositories }) => ({
+          permissions: authorization.permissions,
+          read: await repositories.findById(fixture.resourceId),
+        }),
+      ),
+    ).resolves.toEqual({
+      status: "executed",
+      value: {
+        permissions: ["organization.read"],
+        read: { status: "found", value: "initial" },
+      },
+    });
+  });
+
+  it("keeps authorized repositories bound to one Organization", async () => {
+    const tenantA = await createFixture({ role: "Viewer" });
+    const tenantB = await createFixture({ role: "Viewer" });
+
+    const result = await scope.runAuthorized(
+      tenantA.context,
+      ORGANIZATION_READ,
+      async ({ repositories }) => ({
+        read: await repositories.findById(tenantB.resourceId),
+        write: await repositories.updateValue(
+          tenantB.resourceId,
+          "must-not-update",
+        ),
+      }),
+    );
+
+    expect(result).toEqual({
+      status: "executed",
+      value: {
+        read: { status: "not-found" },
+        write: { status: "not-found" },
+      },
+    });
+    await expect(probeValue(tenantB.resourceId)).resolves.toBe("initial");
+  });
+
+  it("denies memberships.manage for Viewer without invoking the callback", async () => {
+    const fixture = await createFixture({ role: "Viewer" });
+    const callback = vi.fn(async () => "must-not-run");
+
+    await expect(
+      scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE, callback),
+    ).resolves.toEqual({
+      status: "authorization-denied",
+      reason: "permission-denied",
+    });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["older", 5n, 4n],
+    ["newer", 5n, 6n],
+  ] as const)(
+    "denies a %s Session authorization snapshot",
+    async (_caseName, membershipVersion, sessionVersion) => {
+      const fixture = await createFixture({
+        role: "Admin",
+        membershipVersion,
+        sessionVersion,
+      });
+      const callback = vi.fn(async () => "must-not-run");
+
+      await expect(
+        scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE, callback),
+      ).resolves.toEqual({
+        status: "authorization-denied",
+        reason: "stale-authorization",
+      });
+      expect(callback).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves BIGINT authorization versions beyond Number.MAX_SAFE_INTEGER", async () => {
+    const authorizationVersion = 9_007_199_254_740_993n;
+    const fixture = await createFixture({
+      role: "Admin",
+      membershipVersion: authorizationVersion,
+    });
+
+    const result = await scope.runAuthorized(
+      fixture.context,
+      ORGANIZATION_READ,
+      async ({ authorization }) => authorization.authorizationVersion,
+    );
+
+    expect(result).toEqual({
+      status: "executed",
+      value: authorizationVersion,
+    });
+  });
+
+  it.each(["Suspended", "Revoked"] as const)(
+    "keeps %s Membership as tenant authority denial",
+    async (status) => {
+      const fixture = await createFixture({ role: "Admin" });
+      await fixtureSql.query(
+        `UPDATE organization_memberships
+         SET status = $2,
+             authorization_version = authorization_version + 1,
+             revoked_at = CASE
+               WHEN $2 = 'Revoked' THEN $3::timestamptz
+               ELSE NULL::timestamptz
+             END,
+             updated_at = $3
+         WHERE id = $1::uuid`,
+        [fixture.membershipId, status, now],
+      );
+      const callback = vi.fn(async () => "must-not-run");
+
+      await expect(
+        scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE, callback),
+      ).resolves.toEqual({ status: "tenant-denied" });
+      expect(callback).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an Inactive Organization as tenant authority denial", async () => {
+    const fixture = await createFixture({ role: "Admin" });
+    await fixtureSql.query(
+      "UPDATE organizations SET status = 'Inactive' WHERE id = $1::uuid",
+      [fixture.organizationId],
+    );
+    const callback = vi.fn(async () => "must-not-run");
+
+    await expect(
+      scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE, callback),
+    ).resolves.toEqual({ status: "tenant-denied" });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("keeps a revoked Session as tenant authority denial", async () => {
+    const fixture = await createFixture({ role: "Admin" });
+    await fixtureSql.query(
+      "UPDATE sessions SET revoked_at = $2 WHERE id = $1::uuid",
+      [fixture.sessionId, now],
+    );
+    const callback = vi.fn(async () => "must-not-run");
+
+    await expect(
+      scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE, callback),
+    ).resolves.toEqual({ status: "tenant-denied" });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("makes every Session stale after one Membership version bump", async () => {
+    const fixture = await createFixture({
+      role: "Admin",
+      membershipVersion: 5n,
+    });
+    const secondSessionId = await createSession(
+      fixture.userId,
+      fixture.organizationId,
+      5n,
+    );
+    const secondContext = await mintContext(
+      fixture.userId,
+      secondSessionId,
+      fixture.organizationId,
+      fixture.membershipId,
+    );
+    await fixtureSql.query(
+      `UPDATE organization_memberships
+       SET role = 'Viewer',
+           authorization_version = authorization_version + 1,
+           updated_at = $2
+       WHERE id = $1::uuid`,
+      [fixture.membershipId, now],
+    );
+
+    const results = await Promise.all([
+      scope.runAuthorized(fixture.context, ORGANIZATION_READ, async () => 1),
+      scope.runAuthorized(secondContext, ORGANIZATION_READ, async () => 2),
+    ]);
+
+    expect(results).toEqual([
+      {
+        status: "authorization-denied",
+        reason: "stale-authorization",
+      },
+      {
+        status: "authorization-denied",
+        reason: "stale-authorization",
+      },
+    ]);
+    const sessions = await fixtureSql.query<{
+      current_membership_authorization_version: string;
+    }>(
+      `SELECT current_membership_authorization_version::text
+       FROM sessions
+       WHERE id = ANY($1::uuid[])
+       ORDER BY id`,
+      [[fixture.sessionId, secondSessionId]],
+    );
+    expect(
+      sessions.rows.map(
+        (session) => session.current_membership_authorization_version,
+      ),
+    ).toEqual(["5", "5"]);
+  });
+
+  it("isolates roles and versions between Organizations", async () => {
+    const userId = await createUser();
+    const organizationAId = await createOrganization();
+    const organizationBId = await createOrganization();
+    const membershipAId = await createMembership(
+      userId,
+      organizationAId,
+      "Active",
+      "Admin",
+      3n,
+    );
+    const membershipBId = await createMembership(
+      userId,
+      organizationBId,
+      "Active",
+      "Viewer",
+      7n,
+    );
+    const sessionAId = await createSession(userId, organizationAId, 3n);
+    const sessionBId = await createSession(userId, organizationBId, 7n);
+    const contextA = await mintContext(
+      userId,
+      sessionAId,
+      organizationAId,
+      membershipAId,
+    );
+    const contextB = await mintContext(
+      userId,
+      sessionBId,
+      organizationBId,
+      membershipBId,
+    );
+
+    const resultA = await scope.runAuthorized(
+      contextA,
+      MEMBERSHIPS_MANAGE,
+      async ({ authorization }) => ({
+        organizationId: authorization.tenant.organizationId,
+        role: authorization.role,
+        version: authorization.authorizationVersion,
+      }),
+    );
+    const callbackB = vi.fn(async () => "must-not-run");
+    const resultB = await scope.runAuthorized(
+      contextB,
+      MEMBERSHIPS_MANAGE,
+      callbackB,
+    );
+
+    expect(resultA).toEqual({
+      status: "executed",
+      value: {
+        organizationId: organizationAId,
+        role: "Admin",
+        version: 3n,
+      },
+    });
+    expect(resultB).toEqual({
+      status: "authorization-denied",
+      reason: "permission-denied",
+    });
+    expect(callbackB).not.toHaveBeenCalled();
+  });
+
+  it("linearizes an authorized operation before a privilege reduction", async () => {
+    const fixture = await createFixture({
+      role: "Admin",
+      membershipVersion: 5n,
+    });
+    const operationStarted = deferred();
+    const releaseOperation = deferred();
+    const operation = scope.runAuthorized(
+      fixture.context,
+      MEMBERSHIPS_MANAGE,
+      async ({ repositories }) => {
+        operationStarted.resolve();
+        await releaseOperation.promise;
+        return repositories.updateValue(fixture.resourceId, "operation-won");
+      },
+    );
+    await operationStarted.promise;
+
+    const authorityChange = raceSql.query(
+      `UPDATE organization_memberships
+       SET role = 'Viewer',
+           authorization_version = authorization_version + 1,
+           updated_at = $2
+       WHERE id = $1::uuid`,
+      [fixture.membershipId, now],
+    );
+    await waitForClientLock(raceSql);
+    releaseOperation.resolve();
+
+    await expect(operation).resolves.toEqual({
+      status: "executed",
+      value: { status: "updated" },
+    });
+    await authorityChange;
+    await expect(probeValue(fixture.resourceId)).resolves.toBe("operation-won");
+    await expect(
+      scope.runAuthorized(
+        fixture.context,
+        MEMBERSHIPS_MANAGE,
+        async () => "must-not-run",
+      ),
+    ).resolves.toEqual({
+      status: "authorization-denied",
+      reason: "stale-authorization",
+    });
+  });
+
+  it("does not grant increased privileges to a stale Session", async () => {
+    const fixture = await createFixture({
+      role: "Viewer",
+      membershipVersion: 5n,
+    });
+    await fixtureSql.query(
+      `UPDATE organization_memberships
+       SET role = 'Admin',
+           authorization_version = authorization_version + 1,
+           updated_at = $2
+       WHERE id = $1::uuid`,
+      [fixture.membershipId, now],
+    );
+    const callback = vi.fn(async () => "must-not-run");
+
+    await expect(
+      scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE, callback),
+    ).resolves.toEqual({
+      status: "authorization-denied",
+      reason: "stale-authorization",
+    });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("denies a role reduction committed before the operation", async () => {
+    const fixture = await createFixture({
+      role: "Admin",
+      membershipVersion: 11n,
+    });
+    await fixtureSql.query(
+      `UPDATE organization_memberships
+       SET role = 'Viewer',
+           authorization_version = authorization_version + 1,
+           updated_at = $2
+       WHERE id = $1::uuid`,
+      [fixture.membershipId, now],
+    );
+    const callback = vi.fn(async () => "must-not-run");
+
+    await expect(
+      scope.runAuthorized(fixture.context, MEMBERSHIPS_MANAGE, callback),
+    ).resolves.toEqual({
+      status: "authorization-denied",
+      reason: "stale-authorization",
+    });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("preserves authorized transaction failures as infrastructure errors", async () => {
+    const fixture = await createFixture({ role: "Admin" });
+    const transaction = vi.spyOn(lifecycle.client, "$transaction");
+    transaction.mockRejectedValueOnce(
+      new Error("synthetic authorized transaction failure"),
+    );
+    try {
+      await expect(
+        scope.runAuthorized(
+          fixture.context,
+          MEMBERSHIPS_MANAGE,
+          async () => "must-not-run",
+        ),
+      ).rejects.toBeInstanceOf(TenantPersistenceError);
+    } finally {
+      transaction.mockRestore();
+    }
+  });
+
+  it("fails closed for an invalid runtime PermissionRequirement", async () => {
+    const fixture = await createFixture({ role: "Owner" });
+    const callback = vi.fn(async () => "must-not-run");
+
+    await expect(
+      scope.runAuthorized(
+        fixture.context,
+        // @ts-expect-error Runtime callers can still provide corrupt input.
+        Object.freeze({ requiredPermission: "*" }),
+        callback,
+      ),
+    ).resolves.toEqual({
+      status: "authorization-denied",
+      reason: "invalid-permission-requirement",
+    });
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("rolls back callback writes after final Organization authority loss", async () => {
+    const fixture = await createFixture({ role: "Viewer" });
+    const operationStarted = deferred();
+    const releaseOperation = deferred();
+    const operation = scope.runAuthorized(
+      fixture.context,
+      ORGANIZATION_READ,
+      async ({ repositories }) => {
+        const write = await repositories.updateValue(
+          fixture.resourceId,
+          "must-roll-back",
+        );
+        operationStarted.resolve();
+        await releaseOperation.promise;
+        return write;
+      },
+    );
+    await operationStarted.promise;
+
+    await raceSql.query(
+      "UPDATE organizations SET status = 'Inactive' WHERE id = $1::uuid",
+      [fixture.organizationId],
+    );
+    releaseOperation.resolve();
+
+    await expect(operation).resolves.toEqual({ status: "tenant-denied" });
+    await expect(probeValue(fixture.resourceId)).resolves.toBe("initial");
   });
 });
