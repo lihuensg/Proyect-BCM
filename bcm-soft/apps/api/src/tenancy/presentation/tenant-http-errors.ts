@@ -23,3 +23,20 @@ export function tenantSelectionRequired(): SafeHttpException {
     "Se requiere seleccionar una organizaci\u00f3n.",
   );
 }
+
+export function authorizationDenied(): SafeHttpException {
+  return new SafeHttpException(
+    403,
+    "AUTHORIZATION_DENIED",
+    "La sesi\u00f3n no tiene autorizaci\u00f3n para esta operaci\u00f3n.",
+  );
+}
+
+export function staleAuthorizationDenied(): SafeHttpException {
+  return new SafeHttpException(
+    403,
+    "AUTHORIZATION_DENIED",
+    "La sesi\u00f3n no tiene autorizaci\u00f3n para esta operaci\u00f3n.",
+    { authorizationState: "stale" },
+  );
+}

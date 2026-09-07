@@ -35,6 +35,16 @@ class TestController {
       "A safe conflict occurred.",
     );
   }
+
+  @Get("stale-authorization")
+  staleAuthorization(): never {
+    throw new SafeHttpException(
+      403,
+      "AUTHORIZATION_DENIED",
+      "Authorization is required.",
+      { authorizationState: "stale" },
+    );
+  }
 }
 
 @Module({ imports: [AppModule], controllers: [TestController] })
@@ -204,6 +214,68 @@ describe("API observability foundation", () => {
       requestId: VALID_REQUEST_ID,
     });
   });
+
+  it("adds only allowlisted stale authorization details when explicit", async () => {
+    const response = await request(
+      "/api/test/stale-authorization",
+      VALID_REQUEST_ID,
+    );
+
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body).toEqual({
+      statusCode: 403,
+      code: "AUTHORIZATION_DENIED",
+      message: "Authorization is required.",
+      requestId: VALID_REQUEST_ID,
+      details: { authorizationState: "stale" },
+    });
+    expect(JSON.stringify(body)).not.toMatch(
+      /stale-authorization|requiredPermission|authorizationVersion|stack/iu,
+    );
+  });
+
+  it.each([
+    [
+      "an extra internal reason",
+      { authorizationState: "stale", internalReason: "must-not-leak" },
+    ],
+    [
+      "a nested arbitrary object",
+      { authorizationState: "stale", context: { private: "must-not-leak" } },
+    ],
+    [
+      "an internal identifier",
+      {
+        authorizationState: "stale",
+        organizationId: "0198d5a0-0000-7000-8000-000000000001",
+      },
+    ],
+    [
+      "a permission",
+      {
+        authorizationState: "stale",
+        requiredPermission: "memberships.manage",
+      },
+    ],
+    [
+      "an authorization version",
+      { authorizationState: "stale", authorizationVersion: "2" },
+    ],
+  ] as const)(
+    "rejects safe details containing %s before serialization",
+    (_caseName, details) => {
+      expect(
+        () =>
+          new SafeHttpException(
+            403,
+            "AUTHORIZATION_DENIED",
+            "Authorization is required.",
+            details,
+          ),
+      ).toThrow("Unsupported safe HTTP error details.");
+    },
+  );
 
   it("correlates the completion log with the request ID", async () => {
     await request("/api/health/live", VALID_REQUEST_ID);

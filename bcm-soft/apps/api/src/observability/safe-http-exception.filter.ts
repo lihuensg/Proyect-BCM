@@ -9,13 +9,17 @@ import { HttpAdapterHost } from "@nestjs/core";
 
 import type { PinoLoggerAdapter } from "./pino-logger.adapter.js";
 import type { RequestContext } from "./request-context.js";
-import { SafeHttpException } from "./safe-http-exception.js";
+import {
+  SafeHttpException,
+  type SafeHttpExceptionDetails,
+} from "./safe-http-exception.js";
 
 type SafeErrorResponse = Readonly<{
   statusCode: number;
   code: string;
   message: string;
   requestId: string;
+  details?: SafeHttpExceptionDetails;
 }>;
 
 @Catch()
@@ -53,6 +57,13 @@ export class SafeHttpExceptionFilter implements ExceptionFilter {
         code: exception.code,
         message: exception.safeMessage,
         requestId,
+        ...(exception.details === undefined
+          ? {}
+          : {
+              details: {
+                authorizationState: exception.details.authorizationState,
+              },
+            }),
       };
     }
 
