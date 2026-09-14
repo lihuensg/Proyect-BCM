@@ -2,7 +2,7 @@
 
 **Estado:** Completed  
 **Fase:** BCM-005 — Security Architecture
-**Última revisión:** BCM-TEN-002A — Durable RBAC V1 Product/Security Decisions
+**Última revisión:** BCM-TEN-002E — End-to-end RBAC security closure
 
 Este documento define la arquitectura y los estándares de seguridad de BCM SOFT antes de implementar controles. Usa OWASP ASVS y OWASP Top 10 como referencias conceptuales, sin declarar cumplimiento formal.
 
@@ -443,6 +443,25 @@ events are `session.renewal.succeeded`, `.failed`, `.rate_limited` and
 `.selection_cleared`, correlated through existing request logging without
 credentials, token hashes or authority versions. Existing Pino audit hooks are
 not durable Audit Records; durable Identity audit remains future work.
+
+### 38.2. RBAC closure review (BCM-TEN-002E)
+
+BCM-TEN-002 is closed after an end-to-end Critical review with real PostgreSQL
+evidence. A tenant-owned protected operation requires valid Authentication,
+active tenant authority, an exact Session/Membership authorization-version
+match, a recognized Membership role and an explicitly granted code-defined
+permission. These checks and the operation share one transaction and the
+documented lock order. A mismatch fails closed as `403 AUTHORIZATION_DENIED`
+with only `details.authorizationState = "stale"`; no role, permission, version
+or tenant cause is exposed. Neither a retry nor any client-provided identity,
+tenant, role, permission or version value can refresh stale authority.
+
+Explicit password renewal remains the sole Session replacement path. It is
+separate from tenant authority and RBAC, preserves the authenticated-Session
+and wrong-password HTTP distinction, and atomically replaces only the current
+Session. The closure review found no Blocker or High finding. It made one
+boundary hardening correction: renewal accepts `password` only as its own
+single request-body property.
 
 ## 39. Sensitive Actions
 

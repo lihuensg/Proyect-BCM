@@ -131,7 +131,7 @@ export class AuthController {
       typeof body !== "object" ||
       Array.isArray(body) ||
       Object.keys(body).length !== 1 ||
-      !("password" in body) ||
+      !Object.hasOwn(body, "password") ||
       typeof body.password !== "string"
     )
       throw invalidRequest();
