@@ -4,6 +4,21 @@ import type { PinoLoggerAdapter } from "../../observability/pino-logger.adapter.
 export class PinoIdentityAudit implements IdentityAudit {
   constructor(private readonly logger: PinoLoggerAdapter) {}
 
+  recordRenewal(
+    outcome: "succeeded" | "failed" | "rate_limited" | "selection_cleared",
+  ): void {
+    this.logger.record(
+      outcome === "failed" || outcome === "rate_limited" ? "warn" : "info",
+      `session.renewal.${outcome}`,
+      {
+        module: "identity",
+        operation: "session-renewal",
+        outcome,
+        auditDurability: "diagnostic-only",
+      },
+    );
+  }
+
   recordLoginSucceeded(userId: string): void {
     this.logger.record("info", "identity.login.succeeded", {
       operation: "login",
@@ -29,7 +44,7 @@ export class PinoIdentityAudit implements IdentityAudit {
     });
   }
 
-  recordOriginRejected(operation: "login" | "logout"): void {
+  recordOriginRejected(operation: "login" | "logout" | "renew"): void {
     this.logger.record("warn", "identity.origin.rejected", {
       operation,
       outcome: "rejected",
@@ -37,7 +52,7 @@ export class PinoIdentityAudit implements IdentityAudit {
     });
   }
 
-  recordCsrfRejected(operation: "logout"): void {
+  recordCsrfRejected(operation: "logout" | "renew"): void {
     this.logger.record("warn", "identity.csrf.rejected", {
       operation,
       outcome: "rejected",

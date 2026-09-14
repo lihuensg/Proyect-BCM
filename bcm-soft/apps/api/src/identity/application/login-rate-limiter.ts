@@ -26,3 +26,9 @@ export interface LoginRateLimiter {
     input: Readonly<{ normalizedEmail: string; clientIp: string }>,
   ): Promise<LoginRateLimitResult>;
 }
+
+export interface PasswordReauthenticationRateLimiter {
+  consumeForUser(
+    input: Readonly<{ userId: string; clientIp: string }>,
+  ): Promise<LoginRateLimitResult>;
+}

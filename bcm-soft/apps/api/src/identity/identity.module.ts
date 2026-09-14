@@ -31,8 +31,11 @@ import { LocalNetworkRateLimiter } from "./application/local-network-rate-limite
 import type {
   LoginRateLimiter,
   LoginRateLimitStore,
+  PasswordReauthenticationRateLimiter,
 } from "./application/login-rate-limiter.js";
 import { TrustedOriginValidator } from "./presentation/trusted-origin-validator.js";
+import { SessionRenewalService } from "./application/session-renewal-service.js";
+import type { SessionSnapshotFactory } from "./infrastructure/prisma-session-repository.js";
 
 const CLOCK = Symbol("Clock");
 const CREDENTIAL_REPOSITORY = Symbol("CredentialRepository");
@@ -48,6 +51,7 @@ export class IdentityModule {
   static register(
     config: ServerConfig,
     logger: PinoLoggerAdapter,
+    snapshots: SessionSnapshotFactory,
   ): DynamicModule {
     const providers: Provider[] = [
       {
@@ -73,7 +77,7 @@ export class IdentityModule {
         provide: SESSION_REPOSITORY,
         inject: [PrismaClientLifecycle],
         useFactory: (lifecycle: PrismaClientLifecycle): SessionRepository =>
-          new PrismaSessionRepository(lifecycle.client),
+          new PrismaSessionRepository(lifecycle.client, snapshots),
       },
       {
         provide: IDENTITY_AUDIT,
@@ -178,6 +182,35 @@ export class IdentityModule {
             clock,
             audit,
             rateLimiter,
+          ),
+      },
+      {
+        provide: SessionRenewalService,
+        inject: [
+          SESSION_REPOSITORY,
+          CredentialAuthenticator,
+          LOGIN_RATE_LIMITER,
+          SESSION_TOKEN_SERVICE,
+          CLOCK,
+          PinoIdentityAudit,
+        ],
+        useFactory: (
+          repository: PrismaSessionRepository,
+          authenticator: CredentialAuthenticator,
+          limiter: PasswordReauthenticationRateLimiter,
+          tokens: SessionTokenService,
+          clock: Clock,
+          audit: PinoIdentityAudit,
+        ) =>
+          new SessionRenewalService(
+            repository,
+            authenticator,
+            limiter,
+            tokens,
+            clock,
+            generateUuidV7,
+            config.session,
+            audit,
           ),
       },
       {

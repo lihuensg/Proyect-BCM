@@ -403,6 +403,7 @@ RG03-F004 remains **Pending**.
 RG03-F005 (versioned durable browser validation evidence) is **Resolved** by `docs/reviews/RG-03-BROWSER-EVIDENCE.md` without adding automation or sensitive artifacts.
 BCM-TEN-001 closes session-derived tenant authority, active Membership revalidation, and tenant-bound persistence scope. It does not complete semantic RBAC/authorization-version enforcement (BCM-TEN-002), product-table RLS (BCM-TEN-003), Organization switching (BCM-TEN-004), or RG-04.
 BCM-TEN-002A records the approved V1 role/permission matrix, Owner invariants and fail-closed authorization-version renewal policy. TEN002-B001 and TEN002-B002 are **Resolved** as decisions; BCM-TEN-002 remains **Pending** until its technical implementation and review are complete.
+BCM-TEN-002D2 remains **Pending checkpoint**. Its explicit password Session replacement contract is recorded in `docs/SECURITY.md`; this does not complete BCM-TEN-002 or start TEN-002E, TEN-003 or TEN-004.
 RG-04 follows BCM-TEN-004 and is the hard boundary before business data.
 RG-05 follows BCM-CAT-001 and may require a bounded refactor before pattern replication.
 

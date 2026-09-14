@@ -5,10 +5,13 @@ import type {
   LoginRateLimiter,
   LoginRateLimitResult,
   LoginRateLimitStore,
+  PasswordReauthenticationRateLimiter,
 } from "./login-rate-limiter.js";
 import type { NodeRateLimitFingerprint } from "../infrastructure/node-rate-limit-fingerprint.js";
 
-export class PersistentLoginRateLimiter implements LoginRateLimiter {
+export class PersistentLoginRateLimiter
+  implements LoginRateLimiter, PasswordReauthenticationRateLimiter
+{
   constructor(
     private readonly store: LoginRateLimitStore,
     private readonly fingerprints: NodeRateLimitFingerprint,
@@ -43,6 +46,39 @@ export class PersistentLoginRateLimiter implements LoginRateLimiter {
         this.rules.identityNetwork,
       ),
     ];
+    return this.consumeAttempts(attempts);
+  }
+
+  consumeForUser(
+    input: Readonly<{ userId: string; clientIp: string }>,
+  ): Promise<LoginRateLimitResult> {
+    // Reuse the existing credential-verification store and network budget.
+    // User buckets have a separate HMAC purpose and survive Session rotation.
+    return this.consumeAttempts([
+      this.attempt(
+        "Network",
+        this.fingerprints.network(input.clientIp),
+        this.rules.network,
+      ),
+      this.attempt(
+        "Identity",
+        this.fingerprints.reauthenticationIdentity(input.userId),
+        this.rules.identity,
+      ),
+      this.attempt(
+        "IdentityNetwork",
+        this.fingerprints.reauthenticationIdentityNetwork(
+          input.userId,
+          input.clientIp,
+        ),
+        this.rules.identityNetwork,
+      ),
+    ]);
+  }
+
+  private async consumeAttempts(
+    attempts: readonly LoginRateLimitAttempt[],
+  ): Promise<LoginRateLimitResult> {
     const now = this.clock.now();
     const blockedUntil = await this.store.consume(attempts, now);
     if (blockedUntil === null) return Object.freeze({ allowed: true });

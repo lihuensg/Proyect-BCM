@@ -3,6 +3,26 @@ import { describe, expect, it } from "vitest";
 import { NodeRateLimitFingerprint } from "./node-rate-limit-fingerprint.js";
 
 describe("NodeRateLimitFingerprint", () => {
+  it("separates Session renewal identity keys from login and frames the identity/network pair", () => {
+    const service = new NodeRateLimitFingerprint(Buffer.alloc(32, 9));
+    const userId = "01994011-aaaa-7000-8000-111111111111";
+    const fingerprint = service.reauthenticationIdentity(userId);
+    expect(fingerprint).toHaveLength(32);
+    expect(service.reauthenticationIdentity(userId)).toEqual(fingerprint);
+    expect(fingerprint).not.toEqual(service.identity(userId));
+    expect(fingerprint.toString("utf8")).not.toContain(userId);
+    expect(
+      service.reauthenticationIdentityNetwork(userId, "127.0.0.1"),
+    ).not.toEqual(service.identityNetwork(userId, "127.0.0.1"));
+    expect(service.reauthenticationIdentityNetwork("ab", "c")).not.toEqual(
+      service.reauthenticationIdentityNetwork("a", "bc"),
+    );
+    expect(
+      new NodeRateLimitFingerprint(
+        Buffer.alloc(32, 8),
+      ).reauthenticationIdentity(userId),
+    ).not.toEqual(fingerprint);
+  });
   it("creates deterministic, purpose-separated, non-raw fingerprints", () => {
     const service = new NodeRateLimitFingerprint(Buffer.alloc(32, 9));
     const identity = service.identity("user@example.com");

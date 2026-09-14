@@ -11,6 +11,8 @@ import {
 
 import { EmailAddressError } from "../application/email-address.js";
 import { LoginUseCase } from "../application/login-use-case.js";
+import { SessionRenewalService } from "../application/session-renewal-service.js";
+import { SessionService } from "../application/session-service.js";
 import { LogoutUseCase } from "../application/logout-use-case.js";
 import { SessionBootstrapUseCase } from "../application/session-bootstrap-use-case.js";
 import { SafeHttpException } from "../../observability/safe-http-exception.js";
@@ -99,7 +101,80 @@ export class AuthController {
     private readonly csrfTokens: NodeCsrfTokenService,
     private readonly localRateLimiter: LocalNetworkRateLimiter,
     private readonly audit: PinoIdentityAudit,
+    private readonly renewal: SessionRenewalService,
+    private readonly sessions: SessionService,
   ) {}
+
+  @Post("session/renew")
+  @HttpCode(204)
+  async renew(
+    @Body() body: unknown,
+    @Headers("cookie") cookieHeader: string | undefined,
+    @Req() request: HttpRequest,
+    @Res({ passthrough: true }) response: HeaderResponse,
+  ): Promise<void> {
+    const rawToken = this.cookies.parse(cookieHeader);
+    if (rawToken === null) throw authenticationRequired();
+    const session = await this.sessions.validateSession(rawToken);
+    if (session.status !== "valid") throw authenticationRequired();
+    if (!this.origins.accepts(request)) {
+      this.audit.recordOriginRejected("renew");
+      throw originRejected();
+    }
+    const csrfToken = readSingleHeader(request, "x-csrf-token");
+    if (csrfToken === null || !this.csrfTokens.verify(rawToken, csrfToken)) {
+      this.audit.recordCsrfRejected("renew");
+      throw csrfRejected();
+    }
+    if (
+      body === null ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      Object.keys(body).length !== 1 ||
+      !("password" in body) ||
+      typeof body.password !== "string"
+    )
+      throw invalidRequest();
+    const clientIp = canonicalizeClientIp(request.socket.remoteAddress);
+    if (clientIp === null) throw invalidRequest();
+    const localLimit = this.localRateLimiter.consume(clientIp);
+    if (!localLimit.allowed) {
+      response.setHeader("retry-after", String(localLimit.retryAfterSeconds));
+      this.audit.recordRenewal("rate_limited");
+      throw new SafeHttpException(
+        429,
+        "TOO_MANY_REQUESTS",
+        "Demasiados intentos. Intentá nuevamente más tarde.",
+      );
+    }
+    const result = await this.renewal.execute({
+      sessionId: session.sessionId,
+      userId: session.userId,
+      rawToken,
+      password: body.password,
+      clientIp,
+    });
+    if (result.status === "authentication-required")
+      throw authenticationRequired();
+    if (result.status === "invalid")
+      throw new SafeHttpException(
+        401,
+        "INVALID_CREDENTIALS",
+        "Las credenciales no son válidas.",
+      );
+    if (result.status === "rate-limited") {
+      response.setHeader("retry-after", String(result.retryAfterSeconds));
+      throw new SafeHttpException(
+        429,
+        "TOO_MANY_REQUESTS",
+        "Demasiados intentos. Intentá nuevamente más tarde.",
+      );
+    }
+    response.setHeader(
+      "set-cookie",
+      this.cookies.serialize(result.session.rawToken, result.session.expiresAt),
+    );
+  }
 
   @Post("login")
   @HttpCode(204)

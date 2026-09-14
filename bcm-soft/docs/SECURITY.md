@@ -396,6 +396,54 @@ Role, versión y permissions se resuelven exclusivamente desde la Membership de 
 
 Las futuras mutaciones de role/status deben ser transaccionales, evitar self-escalation, preservar al menos un Owner Active, incrementar la versión atómicamente y producir audit durable. El audit incluye actor interno, target Membership, Organization, previous/new role o status según policy sanitizada, cambio de versión y correlation/request ID; nunca tokens, cookies ni secrets. TEN-002A no implementa esas mutaciones ni el audit store.
 
+### 38.1. Explicit Session renewal (BCM-TEN-002D2)
+
+`POST /api/auth/session/renew` accepts only `{ password }`. It requires the
+currently authenticated Session, the existing exact Origin/Referer policy and
+that Session's CSRF token. It requires no tenant authority or RBAC permission;
+both stale and non-stale authenticated Sessions may explicitly reauthenticate.
+Password verification reuses Identity's Argon2/password semantics without trim,
+normalization or truncation. Wrong credentials return generic `401
+INVALID_CREDENTIALS`; invalid Authentication returns `401 AUTHENTICATION_REQUIRED`.
+Transport errors, CSRF/Origin rejection, rate limiting and operational errors
+retain the existing safe 400/403/429/500 envelopes.
+
+Argon2 verification occurs outside the replacement transaction. Inside it, lock
+order is old Session `FOR UPDATE` → User `FOR SHARE` → password credential `FOR
+SHARE` → selected Membership `FOR SHARE` → shared Organization authority advisory
+lock. Recheck Session ID/User/token digest, revocation and absolute/idle expiry;
+require Active User and the exact credential hash that was verified. Credential
+changes before the locked comparison fail closed. Locks remain held through
+commit; future credential mutation flows must respect this order when also
+locking existing Sessions. Organization mutations use the matching exclusive
+TEN-001 advisory lock.
+
+Create a new opaque Session with a fresh lifetime and revoke only the old Session
+in one transaction. The old snapshot is never updated. Preserve only its selected
+Organization when Membership/User, Active status, role, version and Organization
+remain valid; otherwise both selection fields are NULL. No selection remains
+NULL, and renewal never chooses a different Organization. Normal tenant
+bootstrap/switching remains a separate capability. Competing renewal requests
+serialize on the old Session; only one may replace it. Rollback leaves no usable
+replacement or replacement cookie. Other Sessions remain untouched.
+
+Success is `204 No Content` with the existing Session cookie policy. The old
+token subsequently fails Authentication. `GET /api/auth/session` remains
+identity-only and bootstraps the new Session-bound CSRF token; old CSRF material
+does not authorize the replacement Session. PostgreSQL replacement is atomic,
+but delivery of the HTTP response is not: if the committed response is lost, the
+old token is revoked and the user may need to log in again.
+
+Renewal reuses the persistent credential-verification store (`Login` operation),
+existing thresholds and HMAC infrastructure. Network budgets are shared with
+login; User and User/network buckets use distinct renewal HMAC purposes and
+persist across Session rotation. Local network limiting also applies. No raw
+email/IP is stored or logged and no new datastore is introduced. Diagnostic
+events are `session.renewal.succeeded`, `.failed`, `.rate_limited` and
+`.selection_cleared`, correlated through existing request logging without
+credentials, token hashes or authority versions. Existing Pino audit hooks are
+not durable Audit Records; durable Identity audit remains future work.
+
 ## 39. Sensitive Actions
 
 Auditoría reforzada, permission específica, confirmación de intención y reason cuando corresponda para:

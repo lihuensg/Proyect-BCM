@@ -4,6 +4,9 @@ const PURPOSES = {
   Identity: "bcm-soft/rate-limit/login/identity/v1",
   Network: "bcm-soft/rate-limit/login/network/v1",
   IdentityNetwork: "bcm-soft/rate-limit/login/identity-network/v1",
+  ReauthenticationIdentity: "bcm-soft/rate-limit/session-renewal/identity/v1",
+  ReauthenticationIdentityNetwork:
+    "bcm-soft/rate-limit/session-renewal/identity-network/v1",
 } as const;
 
 function frame(value: string): Buffer {
@@ -37,5 +40,19 @@ export class NodeRateLimitFingerprint {
       .update(Buffer.of(0))
       .update(input)
       .digest();
+  }
+
+  reauthenticationIdentity(userId: string): Buffer {
+    return this.digest(
+      PURPOSES.ReauthenticationIdentity,
+      Buffer.from(userId, "utf8"),
+    );
+  }
+
+  reauthenticationIdentityNetwork(userId: string, clientIp: string): Buffer {
+    return this.digest(
+      PURPOSES.ReauthenticationIdentityNetwork,
+      Buffer.concat([frame(userId), frame(clientIp)]),
+    );
   }
 }

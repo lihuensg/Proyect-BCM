@@ -7,6 +7,7 @@ import { PrismaClientLifecycle } from "../infrastructure/database/prisma-client-
 import type { PinoLoggerAdapter } from "../observability/pino-logger.adapter.js";
 import type { TenantPersistenceScope } from "./application/tenant-persistence-scope.js";
 import { PrismaTenantAuthorityAdapter } from "./infrastructure/prisma-tenant-authority.js";
+import { PrismaSessionAuthorizationSnapshot } from "./infrastructure/prisma-session-authorization-snapshot.js";
 import { PrismaTenantPersistenceScope } from "./infrastructure/prisma-tenant-persistence-scope.js";
 import { TenantAuthorityGuard } from "./presentation/tenant-authority.guard.js";
 import { TenantAuthorityHttpBoundary } from "./presentation/tenant-authority-http-boundary.js";
@@ -68,7 +69,13 @@ export class TenancyModule {
 
     return {
       module: TenancyModule,
-      imports: [IdentityModule.register(config, logger)],
+      imports: [
+        IdentityModule.register(
+          config,
+          logger,
+          (transaction) => new PrismaSessionAuthorizationSnapshot(transaction),
+        ),
+      ],
       providers,
       exports: [
         TENANT_AUTHORITY_RESOLVER,
