@@ -126,13 +126,13 @@ export class AuthController {
       this.audit.recordCsrfRejected("renew");
       throw csrfRejected();
     }
+    if (body === null || typeof body !== "object" || Array.isArray(body))
+      throw invalidRequest();
+    const renewalBody = body as Record<string, unknown>;
     if (
-      body === null ||
-      typeof body !== "object" ||
-      Array.isArray(body) ||
-      Object.keys(body).length !== 1 ||
-      !Object.hasOwn(body, "password") ||
-      typeof body.password !== "string"
+      Object.keys(renewalBody).length !== 1 ||
+      !Object.hasOwn(renewalBody, "password") ||
+      typeof renewalBody.password !== "string"
     )
       throw invalidRequest();
     const clientIp = canonicalizeClientIp(request.socket.remoteAddress);
@@ -151,7 +151,7 @@ export class AuthController {
       sessionId: session.sessionId,
       userId: session.userId,
       rawToken,
-      password: body.password,
+      password: renewalBody.password,
       clientIp,
     });
     if (result.status === "authentication-required")
