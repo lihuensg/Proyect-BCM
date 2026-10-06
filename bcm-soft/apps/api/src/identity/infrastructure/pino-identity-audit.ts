@@ -1,37 +1,42 @@
+import type {
+  ExternalLoginAudit,
+  ExternalLoginDenialReason,
+} from "../application/external-login-use-case.js";
 import type { IdentityAudit } from "../application/identity-audit.js";
 import type { PinoLoggerAdapter } from "../../observability/pino-logger.adapter.js";
 
-export class PinoIdentityAudit implements IdentityAudit {
+export class PinoIdentityAudit implements IdentityAudit, ExternalLoginAudit {
   constructor(private readonly logger: PinoLoggerAdapter) {}
 
-  recordRenewal(
-    outcome: "succeeded" | "failed" | "rate_limited" | "selection_cleared",
-  ): void {
-    this.logger.record(
-      outcome === "failed" || outcome === "rate_limited" ? "warn" : "info",
-      `session.renewal.${outcome}`,
-      {
-        module: "identity",
-        operation: "session-renewal",
-        outcome,
-        auditDurability: "diagnostic-only",
-      },
-    );
-  }
-
-  recordLoginSucceeded(userId: string): void {
-    this.logger.record("info", "identity.login.succeeded", {
-      operation: "login",
+  recordExternalLoginSucceeded(userId: string): void {
+    this.logger.record("info", "identity.external_login.succeeded", {
+      operation: "external-login",
       outcome: "succeeded",
+      provider: "auth0",
       userId,
       auditDurability: "diagnostic-only",
     });
   }
 
-  recordLoginFailed(): void {
-    this.logger.record("warn", "identity.login.failed", {
-      operation: "login",
+  recordExternalLoginDenied(reason: ExternalLoginDenialReason): void {
+    this.logger.record(
+      reason === "provider-error" ? "error" : "warn",
+      "identity.external_login.denied",
+      {
+        operation: "external-login",
+        outcome: "denied",
+        provider: "auth0",
+        reason,
+        auditDurability: "diagnostic-only",
+      },
+    );
+  }
+
+  recordPasswordSetupEmailFailed(): void {
+    this.logger.record("error", "identity.password_setup_email.failed", {
+      operation: "membership-provisioning",
       outcome: "failed",
+      provider: "auth0",
       auditDurability: "diagnostic-only",
     });
   }
@@ -44,7 +49,7 @@ export class PinoIdentityAudit implements IdentityAudit {
     });
   }
 
-  recordOriginRejected(operation: "login" | "logout" | "renew"): void {
+  recordOriginRejected(operation: "logout" | "setup" | "tenant-command"): void {
     this.logger.record("warn", "identity.origin.rejected", {
       operation,
       outcome: "rejected",
@@ -52,19 +57,10 @@ export class PinoIdentityAudit implements IdentityAudit {
     });
   }
 
-  recordCsrfRejected(operation: "logout" | "renew"): void {
+  recordCsrfRejected(operation: "logout" | "tenant-command"): void {
     this.logger.record("warn", "identity.csrf.rejected", {
       operation,
       outcome: "rejected",
-      auditDurability: "diagnostic-only",
-    });
-  }
-
-  recordLoginRateLimited(retryAfterSeconds: number): void {
-    this.logger.record("warn", "identity.login.rate_limited", {
-      operation: "login",
-      outcome: "rate-limited",
-      retryAfterSeconds,
       auditDurability: "diagnostic-only",
     });
   }

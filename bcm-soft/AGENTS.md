@@ -76,7 +76,7 @@ API uses NestJS with strict TypeScript.
 PostgreSQL is the system of record.
 Prisma is the encapsulated ORM and migration tool.
 The application interface is REST under `/api`.
-Authentication uses server-side sessions.
+Authentication uses Auth0 (OIDC run by the API) with server-side sessions.
 Multitenancy uses a shared database and schema.
 Authorization uses centralized code-defined RBAC based on active Membership.
 Tenant-owned files use private object storage.

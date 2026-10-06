@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { loadServerConfig } from "../../../src/config/server-config.js";
 import { PrismaClientLifecycle } from "../../../src/infrastructure/database/prisma-client-lifecycle.js";
+import { generateUuidV7 } from "../../../src/infrastructure/identifiers/uuid-v7.js";
 import { withTenantTransaction } from "../../../src/infrastructure/database/tenant-transaction.js";
 
 const organizationA = "0198d5a0-0000-7000-8000-000000000001";
@@ -127,6 +128,7 @@ describe("runtime database roles and transaction-local tenant context", () => {
       can_create_schema_objects: boolean;
       can_insert_organization: boolean;
       can_select_organization: boolean;
+      can_update_organization: boolean;
       can_truncate_sessions: boolean;
       can_use_schema: boolean;
     }>(`
@@ -135,6 +137,7 @@ describe("runtime database roles and transaction-local tenant context", () => {
         has_schema_privilege(current_user, 'public', 'USAGE') AS can_use_schema,
         has_table_privilege(current_user, 'organizations', 'SELECT') AS can_select_organization,
         has_table_privilege(current_user, 'organizations', 'INSERT') AS can_insert_organization,
+        has_table_privilege(current_user, 'organizations', 'UPDATE') AS can_update_organization,
         has_table_privilege(current_user, 'sessions', 'TRUNCATE') AS can_truncate_sessions
     `);
 
@@ -151,8 +154,10 @@ describe("runtime database roles and transaction-local tenant context", () => {
     expect(privileges.rows).toEqual([
       {
         can_create_schema_objects: false,
-        can_insert_organization: false,
+        // INSERT exists only for the one-time initial setup.
+        can_insert_organization: true,
         can_select_organization: true,
+        can_update_organization: false,
         can_truncate_sessions: false,
         can_use_schema: true,
       },
@@ -231,7 +236,22 @@ describe("runtime database roles and transaction-local tenant context", () => {
         runtime_role: process.env.BCM_TEST_RUNTIME_ROLE,
       },
     ]);
-    expect(tableGrants.rows).toHaveLength(26);
+    expect(tableGrants.rows).toHaveLength(19);
+    // Audit Records are append-only to the runtime role (SECURITY.md §40).
+    expect(
+      tableGrants.rows.filter(
+        ({ table_name }) => table_name === "audit_records",
+      ),
+    ).toEqual([{ privilege_type: "INSERT", table_name: "audit_records" }]);
+    // External identity links are immutable to the runtime role.
+    expect(
+      tableGrants.rows.filter(
+        ({ table_name }) => table_name === "user_external_identities",
+      ),
+    ).toEqual([
+      { privilege_type: "INSERT", table_name: "user_external_identities" },
+      { privilege_type: "SELECT", table_name: "user_external_identities" },
+    ]);
     expect(tableGrants.rows).toContainEqual({
       privilege_type: "SELECT",
       table_name: "organizations",
@@ -242,7 +262,7 @@ describe("runtime database roles and transaction-local tenant context", () => {
     expect(usageGrants.rows).toEqual([]);
   });
 
-  it("enables and forces RLS only on the test probe", async () => {
+  it("enables and forces RLS on tenant-owned tables and the test probe only", async () => {
     const result = await migrationSql.query<{
       relforcerowsecurity: boolean;
       relname: string;
@@ -256,23 +276,78 @@ describe("runtime database roles and transaction-local tenant context", () => {
     `);
     const byTable = new Map(result.rows.map((row) => [row.relname, row]));
 
-    expect(byTable.get("test_tenant_rls_probe")).toMatchObject({
-      relforcerowsecurity: true,
-      relrowsecurity: true,
-    });
+    for (const table of ["audit_records", "test_tenant_rls_probe"]) {
+      expect(byTable.get(table)).toMatchObject({
+        relforcerowsecurity: true,
+        relrowsecurity: true,
+      });
+    }
     for (const table of [
-      "identity_rate_limit_windows",
       "organization_invitations",
       "organization_memberships",
       "organizations",
-      "password_recovery_tokens",
       "sessions",
-      "user_password_credentials",
+      "user_external_identities",
       "users",
     ]) {
       expect(byTable.get(table)).toMatchObject({
         relforcerowsecurity: false,
         relrowsecurity: false,
+      });
+    }
+  });
+
+  it("keeps audit_records append-only and tenant-isolated for the runtime role", async () => {
+    const ownOrganization = generateUuidV7();
+    const otherOrganization = generateUuidV7();
+    for (const id of [ownOrganization, otherOrganization]) {
+      await migrationSql.query(
+        `INSERT INTO organizations (id, name, status, timezone, created_at, updated_at)
+         VALUES ($1::uuid, 'Audit RLS', 'Active', 'America/Argentina/Buenos_Aires', now(), now())`,
+        [id],
+      );
+    }
+    const insert = `INSERT INTO audit_records
+        (id, organization_id, action, entity_type, entity_id, after, occurred_at)
+      VALUES ($1::uuid, $2::uuid, 'membership.provisioned', 'OrganizationMembership',
+        $1::uuid, '{"role":"Viewer"}'::jsonb, now())`;
+
+    async function insertAs(
+      context: string | null,
+      organizationId: string,
+    ): Promise<string | null> {
+      await runtimeSql.query("BEGIN");
+      try {
+        if (context !== null) {
+          await runtimeSql.query(
+            "SELECT set_config('bcm.current_organization_id', $1, true)",
+            [context],
+          );
+        }
+        await runtimeSql.query(insert, [generateUuidV7(), organizationId]);
+        return null;
+      } catch (error) {
+        return (error as { code?: string }).code ?? "unknown";
+      } finally {
+        await runtimeSql.query("ROLLBACK");
+      }
+    }
+
+    // 42501: insufficient_privilege, raised for both RLS and missing grants.
+    await expect(insertAs(null, ownOrganization)).resolves.toBe("42501");
+    await expect(insertAs(ownOrganization, otherOrganization)).resolves.toBe(
+      "42501",
+    );
+    await expect(insertAs(ownOrganization, ownOrganization)).resolves.toBe(
+      null,
+    );
+    for (const statement of [
+      "SELECT 1 FROM audit_records",
+      "UPDATE audit_records SET reason = 'x'",
+      "DELETE FROM audit_records",
+    ]) {
+      await expect(runtimeSql.query(statement)).rejects.toMatchObject({
+        code: "42501",
       });
     }
   });

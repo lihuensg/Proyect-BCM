@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { Outlet } from "react-router";
+import { NavLink, Outlet } from "react-router";
 
 import { ApiError } from "../lib/http/api-error";
 import { sessionQueryOptions } from "../features/auth/auth-queries";
@@ -8,7 +8,8 @@ import { useSessionQuery } from "../features/auth/use-session-query";
 import { useAppServices } from "./app-services";
 
 export function AppShell(): ReactNode {
-  const { authApi, queryClient, sessionCoordinator } = useAppServices();
+  const { authApi, navigateAway, queryClient, sessionCoordinator } =
+    useAppServices();
   const session = useSessionQuery();
 
   const logout = useMutation({
@@ -18,6 +19,9 @@ export function AppShell(): ReactNode {
     },
     async onSuccess() {
       await sessionCoordinator.confirmSessionLoss();
+      // The BCM Session is revoked; also end Auth0's SSO session so the next
+      // login asks for credentials again on a shared computer.
+      navigateAway(authApi.providerLogoutUrl());
     },
     onError(error) {
       if (
@@ -43,6 +47,12 @@ export function AppShell(): ReactNode {
     <div className="app-layout">
       <header className="app-header">
         <strong className="brand">BCM SOFT</strong>
+        <nav className="app-nav" aria-label="Principal">
+          <NavLink to="/" end>
+            Inicio
+          </NavLink>
+          <NavLink to="/usuarios">Usuarios</NavLink>
+        </nav>
         <button
           className="secondary-button"
           type="button"

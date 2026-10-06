@@ -140,9 +140,17 @@ No se confía en coincidencia casual de UUIDs ni en scoping del frontend.
 
 Email es globalmente único por identidad. La normalización ocurre antes de persistir y la unicidad se refuerza en PostgreSQL.
 
-### `user_password_credentials`
+### `user_external_identities`
 
-Relación 1:1 con User. Conserva `user_id` PK/FK, `password_hash`, `password_changed_at` y timestamps. El hash contiene algoritmo, salt y parámetros en formato auto-descriptivo; nunca se almacena contraseña ni cifrado reversible. Algoritmo y políticas pertenecen a BCM-005.
+| Campo | Tipo / regla |
+|---|---|
+| `id` | UUIDv7 PK |
+| `user_id` | FK `users` RESTRICT |
+| `provider` | CHECK (`auth0`) |
+| `subject` | `text`, 1–255 caracteres, `sub` del ID token |
+| `created_at` | `timestamptz(3)` |
+
+`UNIQUE (provider, subject)` y `UNIQUE (user_id, provider)`: un subject pertenece a un único User y cada User tiene a lo sumo una identidad por proveedor. BCM no almacena contraseñas: Auth0 custodia las credenciales (ADR-008). El login resuelve el User solo por esta tabla; el vínculo se crea en el alta administrativa o en la configuración inicial. El rol runtime tiene SELECT e INSERT, sin UPDATE ni DELETE: los vínculos son inmutables. Identidad global, sin RLS tenant (§42).
 
 ## 7. Memberships
 
@@ -576,7 +584,7 @@ Cambios posteriores en catálogos, Customer, Equipment, precios sugeridos o conf
 - reason, correlation ID, IP/user-agent cuando la política de seguridad lo permita;
 - `occurred_at`.
 
-Es append-only mediante privilegios del rol runtime y controles de implementación. JSONB se limita a cambios auditables, con allowlist y redacción de secretos/tokens/credenciales. Audit Record complementa, pero no reemplaza, movements, estados ni documentos económicos especializados.
+Es append-only mediante privilegios del rol runtime y controles de implementación. `organization_id` es NOT NULL y `actor_user_id` es NULL para eventos de sistema como la configuración inicial. RLS ENABLE + FORCE con policy transaction-local sobre `bcm.current_organization_id`; el runtime tiene solo INSERT (SELECT llega con `audit.read`). `TenantPersistenceScope.runAuthorized` fija ese contexto con `set_config(..., true)` tras autorizar. JSONB se limita a cambios auditables, con allowlist y redacción de secretos/tokens/credenciales. Audit Record complementa, pero no reemplaza, movements, estados ni documentos económicos especializados.
 
 ## 36. Soft deletion
 
@@ -632,7 +640,7 @@ Se adopta RLS parcialmente desde V1 para tablas operativas tenant-owned, como se
 - migrations/admin usan un rol separado y auditado;
 - `users` y credenciales/sesiones globales no reciben política tenant directa;
 - `organizations` y `organization_memberships` quedan fuera de la policy operativa inicial: bootstrap/switching usa repositories estrictos y capacidades de plataforma separadas;
-- tablas internas globales de recovery y rate limiting no reciben RLS tenant;
+- `user_external_identities` es identidad global y no recibe RLS tenant;
 - Organization Invitations documenta una excepción V1 porque la aceptación pre-auth necesita lookup por token sin Current Organization.
 
 La primera migration que cree cada tabla de negocio debe habilitar/forzar RLS y su policy, o registrar explícitamente por qué está excluida. El uso con pool exige contexto transaction-local y tests de aislamiento; nunca una variable de sesión persistente que pueda filtrarse a otra solicitud.
@@ -652,7 +660,6 @@ Se crean índices por consultas demostradas, con Organization como prefijo cuand
 | Expenses | `(organization_id, occurred_at, id)`, status y category + occurred date |
 | Sale Corrections | `(organization_id, sale_id, occurred_at, id)` y unicidad de versión/idempotencia definida |
 | Sessions | token hash UNIQUE; user + revocation/expiry; expiry para limpieza |
-| Recovery tokens | token hash UNIQUE; user + created date para revocación; expiry para cleanup |
 | Invitations | token hash UNIQUE; Organization + email + lifecycle; expiry para cleanup |
 | Identity rate limits | UNIQUE operation + dimension + fingerprint + window; expiry para cleanup |
 | Movements | Organization + product/equipment + occurred date + id; Organization + occurred date + id |
@@ -694,7 +701,7 @@ La regla por defecto es `ON DELETE RESTRICT` / `NO ACTION` para Organizations, e
 - Sales confirmadas, Payments, Trade-Ins, movimientos y Audit Records nunca dependen de cascadas destructivas;
 - las FKs tenant-aware referencian `(organization_id, id)` para impedir enlaces cruzados.
 
-Para datos de seguridad: Recovery Tokens y Sessions se revocan al desactivar User y se purgan por lifecycle, no por una cascade cotidiana; Invitations usan RESTRICT hacia Organization y Users relacionados, y se revocan al desactivar Organization; Identity Rate Limit Windows no conserva FK a User/Organization para evitar PII y acoplamiento. El borrado físico excepcional de una identidad solo puede incluir hijos efímeros cuando no exista historia que exija RESTRICT.
+Para datos de seguridad: Sessions se revocan al desactivar User y se purgan por lifecycle, no por una cascade cotidiana; Invitations usan RESTRICT hacia Organization y Users relacionados, y se revocan al desactivar Organization; User External Identities usa RESTRICT hacia User y es inmutable para el runtime. El borrado físico excepcional de una identidad solo puede incluir hijos efímeros cuando no exista historia que exija RESTRICT.
 
 Toda excepción se documenta en la migration que la introduce.
 
@@ -728,8 +735,8 @@ Toda excepción se documenta en la migration que la introduce.
 | DB-INV-024 | Idempotency Key | key única por tenant/operación | UNIQUE compuesto | comparar request hash y replay seguro |
 | DB-INV-025 | Audit/Movements | append-only | privilegios; trigger selectivo si procede | sin comandos update/delete |
 | DB-INV-026 | Inventory | cambio y movement confirman juntos | transaction | servicio de aplicación obligatorio |
-| DB-INV-027 | Recovery Token | token hash único en su tabla y token nunca persistido | UNIQUE + NOT NULL | CSPRNG y hash por purpose |
-| DB-INV-028 | Recovery Token | expiry posterior a creation; usado/revocado no reutilizable | CHECK + UPDATE condicional | reset/revocación atómicos |
+| DB-INV-027 | User External Identity | un subject por proveedor pertenece a un único User | UNIQUE (provider, subject) | vínculo solo en alta o configuración inicial |
+| DB-INV-028 | User External Identity | a lo sumo un subject por User y proveedor; vínculo inmutable | UNIQUE (user_id, provider) + grants sin UPDATE/DELETE | conflicto rechaza el alta sin efectos |
 | DB-INV-029 | Invitation | token hash único en su tabla | UNIQUE + NOT NULL | CSPRNG y hash por purpose |
 | DB-INV-030 | Invitation | una invitación pendiente por Organization/email | UNIQUE parcial | revocar anterior antes de re-invitar |
 | DB-INV-031 | Invitation | accepted/revoked/expired no se acepta nuevamente | CHECK + UPDATE condicional | acceptance transaction e idempotency |
@@ -737,7 +744,7 @@ Toda excepción se documenta en la migration que la introduce.
 | DB-INV-033 | Membership | authorization version positiva y crece con cambios de acceso | CHECK | update atómico + audit |
 | DB-INV-034 | Session | Current Organization pertenece al mismo User | FK compuesta a Membership | exigir Active y comparar version por request |
 | DB-INV-035 | Session | Organization context y version son ambos NULL o ambos presentes | CHECK | switch autorizado y atómico |
-| DB-INV-036 | Identity Rate Limit Window | una ventana agregada por operation/dimension/fingerprint | UNIQUE compuesto | incremento atómico y límites configurados |
+| DB-INV-036 | Organization | la configuración inicial crea la primera Organization una sola vez | advisory lock + re-check en la transacción | `SETUP_TOKEN` requerido |
 | DB-INV-037 | Security temporary data | creation/expiry/lifecycle timestamps coherentes | CHECK | rechazo de expired/used/revoked y cleanup |
 | DB-INV-038 | Product | exactamente una Category del mismo tenant | FK tenant-aware NOT NULL | validar categoría activa al crear |
 | DB-INV-039 | Accessory Product | minimum stock ausente o >= 0 | CHECK | alerta derivada en query |
@@ -814,7 +821,7 @@ Los objetos binarios no viven en PostgreSQL; sus keys y metadata sí. Restore de
 
 ```text
 User 1---* Session
-User 1---* PasswordRecoveryToken
+User 1---* UserExternalIdentity
 User 1---* OrganizationMembership *---1 Organization
 Session 0..1---1 Current OrganizationMembership
 Organization 1---1 OrganizationSettings
@@ -837,7 +844,6 @@ Customer 0..1---* Sale 1---* SaleEquipmentLine *---1 Equipment
 Customer 1---* Reservation *---1 Equipment
 Reservation 0..1---1 converted Sale
 Organization 1---* AuditRecord / IdempotencyKey
-IdentityRateLimitWindow (security-internal global, sin FK de PII)
 ```
 
 Todas las relaciones tenant-owned incluyen Organization en sus FKs aunque el mapa la omita visualmente en algunos enlaces.
@@ -858,9 +864,7 @@ Todas las relaciones tenant-owned incluyen Organization en sus FKs aunque el map
 | Inventory Movement | creado junto al cambio de inventario | no aplica | append-only, retención histórica |
 | Audit Record | creado por evento auditable | no aplica | append-only conforme a política de retención/privacidad |
 | Session | login y switching autorizado; last seen throttled | revoked/expired terminal | cleanup temporal por lotes |
-| Recovery Token | solicitud pre-auth; solo digest | used/revoked/expired terminal | cleanup tras retención de seguridad configurable |
 | Organization Invitation | comando tenant autorizado | accepted/revoked/expired terminal | retención corta y cleanup sin borrar Membership |
-| Identity Rate Limit Window | upsert atómico por ventana | expired terminal | cleanup oportunista/scheduled por lotes |
 
 ### Equipment
 
@@ -926,24 +930,6 @@ Candidatos futuros, si la evidencia lo justifica, son `audit_records`, movements
 
 Este addendum incorpora exclusivamente persistencia requerida por `SECURITY.md`. No modifica el modelo económico ni crea un IAM o rate-limiting platform genéricos.
 
-### Password recovery tokens
-
-#### `password_recovery_tokens`
-
-| Campo | Regla conceptual |
-| --- | --- |
-| `id` | UUIDv7 PK |
-| `user_id` | FK global a User, NOT NULL |
-| `token_hash` | `bytea NOT NULL UNIQUE`; nunca token raw |
-| `created_at` | `timestamptz NOT NULL` |
-| `expires_at` | `timestamptz NOT NULL`, posterior a creation |
-| `used_at` | nullable, terminal |
-| `revoked_at` | nullable, terminal |
-
-CHECK impide que `used_at` y `revoked_at` representen dos finales incompatibles y exige timestamps no anteriores a creation. No se persiste status derivable. El consumo bloquea/actualiza condicionalmente una fila vigente (`used_at/revoked_at IS NULL` y no expirada); dentro de la misma transaction cambia el credential hash, marca el token usado y revoca otros recovery tokens y Sessions del User. Dos consumos concurrentes no pueden ganar.
-
-Índices: UNIQUE `token_hash` para lookup; `(user_id, created_at DESC)` para revocar/listar internamente pendientes; `expires_at` para cleanup. User Disabled invalida sus tokens desde Application aunque la fila permanezca hasta cleanup/retención de seguridad.
-
 ### Organization invitations
 
 #### `organization_invitations`
@@ -965,31 +951,11 @@ Acceptance bloquea Invitation, valida hash/expiry/lifecycle, Organization e inte
 
 Índices: UNIQUE `token_hash`; `(organization_id, intended_email_normalized, accepted_at, revoked_at)` para administración scoped; `(organization_id, created_at DESC, id DESC)` para listados internos; `expires_at` para cleanup.
 
-### Persistent identity rate limiting
-
-Se elige una tabla agregada pequeña, no un log de cada intento.
-
-#### `identity_rate_limit_windows`
-
-- `id` UUIDv7;
-- `operation` CHECK (`Login`, `PasswordRecovery`, `Invitation`);
-- `dimension` CHECK (`Identity`, `Network`, `IdentityNetwork`);
-- `key_fingerprint bytea NOT NULL` y `fingerprint_version`;
-- `window_started_at`, `expires_at`, `blocked_until` nullable;
-- `attempt_count integer NOT NULL CHECK >= 0`;
-- `created_at`, `updated_at`.
-
-UNIQUE `(operation, dimension, key_fingerprint, window_started_at)`. Incremento/upsert es atómico. `expires_at > window_started_at`; `blocked_until`, si existe, es posterior al comienzo. No guarda email, IP o User-Agent raw. Como email/IP tienen baja entropía, el fingerprint usa HMAC con clave server-side versionada y purpose-separated; no un hash simple reversible por diccionario. Para Invitation el input del fingerprint puede incorporar Organization ID sin convertir la fila en recurso tenant.
-
-La tabla es security-internal global y temporal. Protege restart de la instancia inicial, pero PostgreSQL no se usa como plataforma de throttling de alto volumen. Si aparecen múltiples replicas o carga sostenida, el adapter puede migrar a un store compartido sin cambiar reglas; Redis continúa fuera de V1.
-
-Índices: UNIQUE de lookup; `expires_at` para cleanup y, solo si operaciones lo necesitan, `blocked_until` parcial para ventanas bloqueadas. No se crea un índice por cada metadata.
-
 ### Common token hashing
 
-Session, Recovery e Invitation reciben secretos aleatorios de al menos 128 bits de entropía efectiva (se recomienda 256 bits) y URL-safe cuando corresponda. Browser/email recibe el secreto; PostgreSQL recibe solamente `SHA-256(purpose || separator || token)` calculado con una primitive mantenida. Purpose separation impide tratar un token de un flujo como otro. El digest determinista permite lookup indexado y se compara constant-time.
+Session e Invitation reciben secretos aleatorios de al menos 128 bits de entropía efectiva (se recomienda 256 bits) y URL-safe cuando corresponda. Browser/email recibe el secreto; PostgreSQL recibe solamente `SHA-256(purpose || separator || token)` calculado con una primitive mantenida. Purpose separation impide tratar un token de un flujo como otro. El digest determinista permite lookup indexado y se compara constant-time.
 
-Esto es distinto de passwords: un token CSPRNG largo no es adivinable por diccionario y usa digest rápido para lookup; una password humana usa Argon2id con salt y work factor. No se crean algoritmos criptográficos propios. Los fingerprints de rate limiting sí son keyed HMAC porque sus inputs son predecibles.
+Un token CSPRNG largo no es adivinable por diccionario y usa digest rápido para lookup. No se crean algoritmos criptográficos propios. El limiter local por IP usa keyed HMAC en memoria porque su input es predecible.
 
 ### Security timestamps and lifecycle
 
@@ -998,7 +964,7 @@ Todos los instantes usan `timestamptz` UTC. Expiry se evalúa con tiempo autorit
 Cleanup inicial combina:
 
 - borrado oportunista acotado después de operaciones relacionadas, sin hacer scans completos;
-- scheduled job simple futuro para Sessions expiradas, tokens usados/revocados/expirados, Invitations terminales/expiradas y rate windows vencidas;
+- scheduled job simple futuro para Sessions expiradas e Invitations terminales/expiradas;
 - lotes con límite e índice de expiry para evitar locks prolongados;
 - retención configurable de metadata terminal cuando sea necesaria para investigar abuso, sin retener secretos raw.
 
@@ -1009,13 +975,12 @@ No requiere worker, broker ni Redis. El cleanup nunca determina validez: una fil
 | Structure | Ownership | RLS V1 | Access model |
 | --- | --- | --- | --- |
 | Sessions | identidad global; Current Organization es contexto nullable | No | Identity repository; nunca recurso tenant normal |
-| Password Recovery Tokens | User global | No | recovery service pre-auth; privilegios internos mínimos |
+| User External Identities | User global | No | Identity; SELECT/INSERT, inmutable para runtime |
 | Organization Invitations | Organization tenant-owned | No, excepción documentada | lookup pre-auth por secret; management siempre scoped y autorizado |
-| Identity Rate Limit Windows | Security global; key puede incluir tenant en fingerprint | No | infraestructura de identidad; no API CRUD |
 
 No aplicar RLS evita requerir Current Organization antes de autenticar/aceptar un token. Esto no habilita lecturas generales: adapters dedicados, grants mínimos, DTOs cerrados y tests impiden exponer filas. Invitations conserva `organization_id`, FKs y scoping para gestión. Si se separan roles de DB por módulo o aparece un flujo autenticado suficiente, se reevalúa RLS.
 
-Son campos internos que nunca salen por APIs normales: token/fingerprint/password/session hashes, authorization versions internas, counters/windows, credential parameters innecesarios y metadata de revocación no requerida por el caso de uso. Las respuestas de recovery no revelan existencia de User o Invitation.
+Son campos internos que nunca salen por APIs normales: token/session hashes, provider subjects, authorization versions internas y metadata de revocación no requerida por el caso de uso. Las respuestas de login y alta no revelan estado de identidad global.
 
 ### Security ↔ Database traceability
 
@@ -1024,18 +989,18 @@ Son campos internos que nunca salen por APIs normales: token/fingerprint/passwor
 | server-side sessions y revocación | `sessions`, token hash, absolute expiry, last seen y revoked timestamp |
 | Current Organization validada | Session context + FK compuesta a Membership + Active check por request |
 | permisos no stale | Membership authorization version + Session snapshot/revalidation |
-| secure password recovery | dedicated recovery table, unique digest, expiry y one-time conditional update |
+| credenciales fuera de BCM | sin tablas de contraseñas; `user_external_identities` vincula el subject de Auth0 |
 | tenant/email-bound invitation | Organization Invitation + intended email/role + Membership UNIQUE |
-| identity abuse protection | aggregated expiring rate-limit windows con keyed fingerprints |
+| identity abuse protection | fuerza bruta en Auth0; limiter local por IP con keyed fingerprints en memoria |
 | secrets no persistidos | purpose-separated digest; raw token solo en browser/email |
 | RLS fail-closed operational | policies tenant-owned existentes; exclusiones Identity explícitas y privilegiadas |
-| data minimization | no raw IP/email en limiter y ningún security hash en API DTOs |
+| data minimization | no raw IP en limiter y ningún security hash ni subject en API DTOs |
 
 ### BCM-005 database review
 
 **Database Review Required:** Resolved.
 
-Los cuatro gaps registrados por SECURITY.md quedan cubiertos: tokens de recovery/invitation; authorization version y Current Organization de Session; rate limiting persistente mínimo; constraints, ownership, indexes, cleanup y decisión RLS. La implementación futura todavía requiere Prisma schema y migrations revisadas, pero no queda una decisión conceptual de persistencia bloqueante atribuible a BCM-005.
+Los gaps registrados por SECURITY.md quedan cubiertos: tokens de invitation; vínculo con el proveedor de identidad; authorization version y Current Organization de Session; constraints, ownership, indexes, cleanup y decisión RLS. La implementación futura todavía requiere Prisma schema y migrations revisadas, pero no queda una decisión conceptual de persistencia bloqueante atribuible a BCM-005.
 
 ## Pending database decisions
 
@@ -1081,7 +1046,7 @@ Las decisiones continúan compatibles con el modular monolith, PostgreSQL compar
 - [x] RLS tiene alcance V1 y límites con pooling/Prisma.
 - [x] Constraints, índices, transacciones y referential actions están catalogados.
 - [x] Migrations, seeds, backup/restore y crecimiento están contemplados.
-- [x] Recovery, Invitations, Session authorization context y abuse windows tienen lifecycle, constraints e índices.
+- [x] Invitations, Session authorization context y external identities tienen lifecycle, constraints e índices.
 - [x] Nuevas estructuras de Identity tienen ownership, exposure y decisión RLS explícitos.
 - [x] No se agregaron entidades fuera del producto ni infraestructura no aprobada.
 

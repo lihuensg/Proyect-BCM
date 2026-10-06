@@ -10,9 +10,9 @@ Este documento define la arquitectura y los estándares de seguridad de BCM SOFT
 
 | Área | Decisión V1 |
 | --- | --- |
-| Authentication | sesiones server-side mediante cookie opaca |
-| Password hashing | Argon2id con parámetros versionados y calibrados |
-| Password baseline | mínimo 15 caracteres, máximo 128; sin reglas arbitrarias de composición ni rotación periódica |
+| Authentication | Auth0 verifica credenciales mediante OIDC Authorization Code + PKCE ejecutado por el API; BCM emite sesiones server-side con cookie opaca (ADR-008) |
+| Credentials | contraseñas, recuperación y protección contra fuerza bruta viven en Auth0; BCM no almacena contraseñas |
+| Account provisioning | alta administrativa: no hay registro abierto; el primer Owner se crea con la configuración inicial protegida por `SETUP_TOKEN` |
 | Session store | PostgreSQL; solo hash del token |
 | Cookie | `__Host-` cuando el deployment lo permita; HttpOnly, Secure, SameSite=Lax, Path=/, sin Domain |
 | CSRF | token ligado a sesión + Origin/Referer + SameSite; CORS no sustituye el control |
@@ -20,9 +20,9 @@ Este documento define la arquitectura y los estándares de seguridad de BCM SOFT
 | Tenant context | sesión + User + Membership activa; nunca un Organization ID libre como autoridad |
 | RLS | parcial desde V1 en tablas operativas tenant-owned, fail-closed y transaction-local |
 | Files | privados, key generada por servidor, acceso autorizado o signed URL breve |
-| Rate limiting | local inicialmente y estado persistente para flujos de identidad; adapter escalable, sin Redis obligatorio |
-| Email verification | sin flujo separado V1; aceptar invitación demuestra control del email |
-| MFA | diferido; prioridad futura Owner/Admin con WebAuthn o TOTP |
+| Rate limiting | límite local por IP en los endpoints de identidad del API; fuerza bruta de credenciales en Auth0; sin Redis obligatorio |
+| Email verification | el email para elegir contraseña que envía Auth0 demuestra control de la casilla |
+| MFA | diferido; se habilita en Auth0, prioridad futura Owner/Admin |
 | Platform Admin | no existe superusuario universal V1 |
 | Secrets | entorno local y secret manager en producción; nunca Git/logs/bundles |
 
@@ -48,7 +48,7 @@ Este documento define la arquitectura y los estándares de seguridad de BCM SOFT
 
 ### Assets
 
-User accounts, password hashes, sessions, Memberships, Organization data, inventory, Sales, Customers, Suppliers, financial values and snapshots, uploaded files, Audit Records, database credentials, application/deployment secrets and backups.
+User accounts and their external identity links, sessions, Memberships, Organization data, inventory, Sales, Customers, Suppliers, financial values and snapshots, uploaded files, Audit Records, database credentials, Auth0 client/Machine-to-Machine secrets, `SETUP_TOKEN`, application/deployment secrets and backups.
 
 ### Threat actors
 
@@ -62,7 +62,7 @@ User accounts, password hashes, sessions, Memberships, Organization data, invent
 
 ### Attack surfaces
 
-Login, recovery e invitations; REST API; browser/cookies; organization switching; IDs, filtros, búsquedas y sorting manipulados; file upload/download; PostgreSQL y RLS; object storage; deployment/CI; logs/audit; backups y dependencias.
+Login callback, configuración inicial e invitations; REST API; browser/cookies; organization switching; IDs, filtros, búsquedas y sorting manipulados; file upload/download; PostgreSQL y RLS; object storage; deployment/CI; logs/audit; backups y dependencias.
 
 ### Trust boundaries
 
@@ -77,10 +77,10 @@ Browser → API, API → PostgreSQL, API → object storage/email provider, CI �
 | SEC-RISK-003 | privilege escalation | Medium | Critical | Critical | allowlist de campos, role changes restringidos y auditados |
 | SEC-RISK-004 | incorrect/stale RLS context | Medium | Critical | Critical | context transaction-local, runtime role restringido, fail-closed y tests |
 | SEC-RISK-005 | race condition altera autorización, stock o ventas | Medium | Critical | Critical | locks, constraints, idempotency y autorización dentro de transaction |
-| SEC-RISK-006 | credential stuffing / brute force | High | High | High | rate limits multidimensionales, delay, password blocklist y monitoreo |
+| SEC-RISK-006 | credential stuffing / brute force | High | High | High | brute-force protection y breached password detection de Auth0, limiter del callback y monitoreo |
 | SEC-RISK-007 | session theft | Medium | High | High | token fuerte/hash, cookie segura, rotation, revocation, HTTPS |
 | SEC-RISK-008 | stale session tras cambio de permiso | Medium | High | High | Membership activa/versionada se valida por request sensible |
-| SEC-RISK-009 | insecure password reset | Medium | Critical | High | token hash, breve, single-use, generic response, revoke sessions |
+| SEC-RISK-009 | toma de cuenta por configuración del proveedor (sign up abierto, vínculo por email, secreto M2M expuesto) | Medium | Critical | High | sign up deshabilitado, vínculo solo por subject en el alta, M2M con `create:users`/`read:users`, secretos server-only |
 | SEC-RISK-010 | malicious upload / file parser exploit | Medium | High | High | allowlist, magic/MIME/decode, limits, private storage, no execution |
 | SEC-RISK-011 | insecure direct file access | Medium | High | High | ownership tenant y signed URL breve tras autorización |
 | SEC-RISK-012 | secret or backup exposure | Low | Critical | High | secret manager, least privilege, encryption, no public access |
@@ -99,11 +99,11 @@ Browser → API, API → PostgreSQL, API → object storage/email provider, CI �
 
 ## 4. Authentication Architecture
 
-V1 usa server-side sessions, no JWT persistido en LocalStorage:
+BCM usa server-side sessions, no JWT persistido en el navegador. Auth0 verifica las credenciales (ADR-008):
 
-1. User envía email y password por HTTPS.
-2. Backend normaliza el identificador, ejecuta un flujo de verificación uniforme y valida Argon2id.
-3. Si User está activo, crea una sesión server-side con token aleatorio.
+1. El navegador navega a `GET /api/auth/auth0/start`; el API emite la cookie firmada de transacción (`state`, `nonce`, `code_verifier`) y redirige a Auth0.
+2. Auth0 autentica al User y redirige a `GET /api/auth/auth0/callback`; el API valida `state` contra la cookie, canjea el code por back channel con PKCE y client secret, y verifica el ID token (firma JWKS RS256, `iss`, `aud`, `exp`, `nonce`, `azp`).
+3. El API resuelve el User solo por `(provider, subject)` en `user_external_identities`; si está vinculado y activo, crea una sesión server-side con token aleatorio. Ningún token de Auth0 llega a JavaScript.
 4. Browser recibe únicamente el identificador opaco en cookie segura.
 5. Browser envía la cookie automáticamente.
 6. Backend hashea el token, resuelve sesión vigente y User activo.
@@ -112,37 +112,21 @@ V1 usa server-side sessions, no JWT persistido en LocalStorage:
 
 Una sesión autenticada no implica acceso a toda Organization ni a toda operación.
 
-## 5. Password Storage
+## 5. Credential Storage
 
-Se adopta **Argon2id**, memory-hard y apropiado para aplicaciones nuevas. Bcrypt queda solo como formato legacy/importación si apareciera esa necesidad.
-
-- baseline inicial: al menos 19 MiB de memoria, 2 iteraciones y paralelismo 1; antes de producción se calibra hacia el mayor costo sostenible con un presupuesto de latencia y memoria definido;
-- cada hash usa salt único generado por la librería;
-- se almacena formato auto-descriptivo con algoritmo, versión y parámetros;
-- al login, un hash con parámetros anteriores se rehashea después de autenticar correctamente;
-- pepper solo como defensa futura si existe secret manager y procedimiento de rotación;
-- nunca password plano, cifrado reversible, hint, log ni Audit Record.
+BCM no almacena contraseñas, hashes ni secretos de recuperación de Users. Auth0 los custodia en la database connection configurada. BCM guarda solo el `subject` del proveedor vinculado a cada User.
 
 ## 6. Password Policy
 
-- mínimo V1: 15 caracteres al no exigir MFA;
-- máximo: 128 caracteres, con límite adicional de bytes documentado para evitar abuso sin truncar silenciosamente;
-- permitir Unicode, espacios, copy/paste, autofill y password managers;
-- no exigir símbolos/mayúsculas/dígitos específicos;
-- no rotación periódica: cambio solo a pedido, reset, evidencia de compromiso o decisión administrativa justificada;
-- comparar contra blocklist de passwords comunes/comprometidos antes de producción sin enviar el password completo a terceros;
-- normalización Unicode, si se adopta, debe ser única, explícita y consistente antes de hash/verify; no se hace trim silencioso.
-
-Strength y resistencia online son controles separados: una password larga no elimina rate limiting.
+La política se configura en la database connection de Auth0: longitud mínima alta (15+) en lugar de reglas de composición, sin rotación periódica forzada, y protección contra contraseñas comprometidas activada. Strength y resistencia online son controles separados.
 
 ## 7. Login Security
 
-- límites por IP/rango, identificador normalizado y combinación; no solo por cuenta;
-- retraso progresivo acotado y respuesta genérica comparable para cuenta inexistente, password inválido o cuenta deshabilitada;
-- sin bloqueo permanente por pocos intentos;
-- fallos agregados y eventos anómalos se monitorean; audit/log no incluye password ni permite enumerar cuentas;
-- éxito rota/crea session ID y limpia contadores pertinentes;
-- CAPTCHA no es baseline y solo se evalúa como escalamiento ante abuso demostrado.
+- Auth0 aplica brute-force protection y detección de ataques; BCM no reimplementa contadores por identidad;
+- el callback aplica el límite local por IP y no revela si un email existe: un subject no vinculado o un User deshabilitado producen el mismo `access_denied`;
+- `state`, `nonce` y PKCE impiden CSRF de login, replay e intercambio de codes;
+- éxito crea un session ID nuevo; el callback no adopta ni revoca la sesión que el navegador presentaba;
+- logout revoca la sesión BCM y luego cierra la sesión SSO de Auth0.
 
 ## 8. Session Storage
 
@@ -159,7 +143,7 @@ Producción:
 - valor opaco sin User/Organization/roles;
 - lifetime coherente con el servidor y eliminación explícita al logout.
 
-Se elige Lax para permitir navegación legítima desde enlaces externos e invitaciones sin enviar cookie en `fetch` cross-site mutante. Strict puede adoptarse si pruebas UX lo permiten. `SameSite=None` requiere revisión de arquitectura y no se usa por defecto. JavaScript nunca lee la cookie.
+Se elige Lax para permitir navegación legítima desde enlaces externos y la vuelta desde Auth0 sin enviar cookie en `fetch` cross-site mutante. Strict puede adoptarse si pruebas UX lo permiten. `SameSite=None` requiere revisión de arquitectura y no se usa por defecto. JavaScript nunca lee la cookie.
 
 ## 10. Session Lifetime
 
@@ -169,7 +153,7 @@ Defaults iniciales configurables:
 - absolute lifetime: 12 horas;
 - `last_seen_at` se actualiza con throttling para no escribir por request;
 - actividad extiende solo idle, nunca absolute;
-- rotación tras login, reset de password, cambio de privilegio/elevación y en una renovación periódica segura;
+- rotación tras login, cambio de privilegio/elevación y en una renovación periódica segura;
 - `remember me` se difiere; requerirá token/serie separados, rotación y mayor protección.
 
 Los valores reflejan una aplicación administrativa con datos comerciales; se revisan con evidencia de uso y threat model, no por conveniencia aislada.
@@ -178,7 +162,7 @@ Los valores reflejan una aplicación administrativa con datos comerciales; se re
 
 - logout revoca la sesión actual y borra cookie;
 - User puede revocar una o todas sus sesiones;
-- password change/reset, User Disabled y actividad sospechosa revocan todas las sesiones del User;
+- User Disabled y actividad sospechosa revocan todas las sesiones del User;
 - Membership revocada bloquea inmediatamente esa Organization, sin necesariamente cerrar acceso legítimo a otras;
 - Admin autorizado puede revocar sesiones según scope;
 - cada request rechaza sesiones expired/revoked y Users Disabled.
@@ -193,7 +177,7 @@ Toda operación state-changing (`POST`, `PUT`, `PATCH`, `DELETE`) exige token CS
 - validación estricta de `Origin` contra allowlist; `Referer` seguro como fallback controlado;
 - métodos GET/HEAD/OPTIONS no cambian estado;
 - content types aceptados se restringen;
-- login, logout, password reset y upload reciben análisis/protección equivalentes;
+- el callback de login (protegido por `state`), logout, la configuración inicial y upload reciben análisis/protección equivalentes;
 - fallo produce rechazo sin efecto parcial.
 
 CORS no es defensa CSRF y SameSite no se usa como única barrera.
@@ -272,7 +256,7 @@ Ninguna capa reemplaza a otra. Operaciones cross-tenant están prohibidas al rol
 
 RLS V1: `equipment`, `accessory_products`, catálogos tenant-owned, `customers`, `suppliers`, `sales`, todas sus lines/payments, `reservations`, `trade_ins`, ambos movement ledgers, `organization_settings`, `audit_records`, `stored_files` y relaciones de archivos, counters e idempotency keys.
 
-Sin RLS tenant directa: `users`, credentials y `sessions` porque son identidad global; `organizations` y `organization_memberships` permanecen fuera de la policy operativa inicial para resolver bootstrap/switching mediante queries estrictas y permisos dedicados. Su incorporación se revisa cuando se cierre el flujo de administración cross-tenant. Excluir una tabla debe quedar explícito; una nueva tabla tenant-owned no se considera terminada sin decisión RLS.
+Sin RLS tenant directa: `users`, `user_external_identities` y `sessions` porque son identidad global; `organizations` y `organization_memberships` permanecen fuera de la policy operativa inicial para resolver bootstrap/switching mediante queries estrictas y permisos dedicados. Su incorporación se revisa cuando se cierre el flujo de administración cross-tenant. Excluir una tabla debe quedar explícito; una nueva tabla tenant-owned no se considera terminada sin decisión RLS.
 
 ## 21. Privileged Database Roles
 
@@ -312,7 +296,7 @@ El contrato conceptual de autorización distingue `401 AUTHENTICATION_REQUIRED` 
 
 ## 27. Resource Enumeration
 
-- login/recovery/invitation usan respuestas genéricas y tiempo comparable;
+- el callback de login e invitations usan respuestas genéricas;
 - un ID de otra Organization se presenta como `404 Not Found` para no confirmar existencia;
 - `401` indica ausencia/invalidación de Authentication;
 - `403` se usa cuando el recurso pertenece al tenant actual pero falta permission;
@@ -346,39 +330,37 @@ El cliente envía el ID de la relación de negocio, no una storage key ejecutabl
 
 ## 32. Rate Limiting
 
-Prioridades: login, recovery, invitation/session creation, uploads, expensive search y exportaciones futuras.
+Prioridades: callback de login, configuración inicial, uploads, expensive search y exportaciones futuras.
 
-- instancia única: limiter local con ventanas/buckets acotados para abuso general;
-- identidad: contadores/ventanas persistentes por IP/rango, cuenta hasheada y operación para que restart no elimine protección;
+- instancia única: limiter local por IP (HMAC del IP, nunca en claro) con ventanas acotadas en los endpoints de identidad del API;
+- la fuerza bruta de credenciales la mitiga Auth0;
 - límites distintos por endpoint, respuesta `429` y `Retry-After` cuando corresponda;
 - proxy IP solo se acepta desde proxies confiables configurados;
 - si hay más de una réplica, el limiter local no es global: se reemplaza detrás de un adapter por store compartido/proveedor, sin introducir Redis antes de esa necesidad.
 
-Rate limiting degrada abuso, no reemplaza password strength, authorization ni capacidad/timeout limits.
+Rate limiting degrada abuso, no reemplaza authorization ni capacidad/timeout limits.
 
 ## 33. Password Recovery
 
-1. Respuesta genérica y tiempo comparable exista o no la cuenta.
-2. Si corresponde, generar token CSPRNG con alta entropía.
-3. Persistir solo hash, purpose, User, expiry, created/used/revoked timestamps; token single-use.
-4. Construir URL desde base confiable, nunca Host del request; no filtrar token por logs/Referer.
-5. Tras token válido, establecer nueva password conforme a policy.
-6. Marcar token usado atómicamente, revocar los demás tokens y todas las sesiones del User.
-7. Notificar el cambio sin enviar password.
-
-Recovery tiene rate limiting; security questions no son factor suficiente.
+La recuperación de contraseña es el flujo "¿Olvidaste tu contraseña?" de Auth0. BCM no emite tokens de recuperación ni conoce contraseñas.
 
 ## 34. Email Verification
 
-No hay flujo separado obligatorio en V1 porque el provisioning es administrativo/invitation-based. La aceptación de una invitación enviada al email bound demuestra control de esa casilla y debe registrarse. Para cuentas creadas manualmente sin esa prueba, recovery y acciones sensibles no se habilitan hasta confirmar el email mediante proceso administrativo seguro. Se revisa al abrir self-signup o comunicaciones sensibles.
+El alta administrativa pide a Auth0 el email para elegir contraseña; completarlo demuestra control de la casilla. No hay registro abierto ni otro flujo de verificación.
 
 ## 35. MFA
 
-MFA se difiere en V1, con riesgo residual de credential theft mitigado por sesiones, rate limiting, monitoreo y revocación. Evolución prioritaria: opcional y luego requerido para Owner/Admin según riesgo. Preferir WebAuthn/passkeys o TOTP con recovery codes protegidos; SMS no será la única estrategia recomendada. Su recuperación requiere threat model propio.
+MFA se difiere en V1, con riesgo residual de credential theft mitigado por sesiones, protección de Auth0, monitoreo y revocación. Se habilita en Auth0: opcional y luego requerido para Owner/Admin según riesgo, preferentemente WebAuthn/passkeys o TOTP; SMS no será la única estrategia.
 
 ## 36. Account Provisioning
 
-V1 usa alta administrativa e invitaciones. Invitation token es CSPRNG, hash-at-rest, expirable (default propuesto 24 horas), single-use, purpose/Organization/email bound y revocable. Aceptarlo no permite elegir Organization, role ni email distintos; esos valores provienen de la invitación autorizada. Crear/revocar invitación requiere `invitations.manage` y Audit Record. Owner puede invitar cualquier role permitido por policy; Admin únicamente Seller o Viewer; Seller y Viewer no gestionan invitations.
+No hay registro abierto: la database connection de Auth0 tiene sign up deshabilitado y el login rechaza todo subject no vinculado.
+
+**Alta de Users.** `POST /api/organization/memberships` requiere `memberships.manage`; Owner asigna cualquier role (un Owner nuevo exige además `memberships.manage_owner`) y Admin solo Seller o Viewer. El API crea la cuenta en la database connection de Auth0 vía Management API (aplicación Machine-to-Machine con solo `create:users` y `read:users`), vincula el subject, crea la Membership y su Audit Record en una transacción re-autorizada, y luego pide a Auth0 el email para elegir contraseña. La llamada a Auth0 ocurre sin transacción abierta. Conflictos de identidad global (User deshabilitado, vínculo con otro subject, email en una conexión no gestionada) responden un único `PROVISIONING_CONFLICT` para no filtrar estado de otras Organizations. El vínculo User↔subject se crea solo en el alta; el login nunca vincula por email.
+
+**Configuración inicial.** Mientras no existe ninguna Organization, `GET /api/setup` informa `required: true` y la Web muestra el asistente. `POST /api/setup` crea la primera Organization, su Owner (cuenta Auth0 + vínculo + Membership) y un Audit Record de sistema, una sola vez: un advisory lock serializa intentos concurrentes y la ausencia de Organizations se re-verifica dentro de la transacción. Al ser público por necesidad, exige `SETUP_TOKEN` (secreto del servidor, comparado en tiempo constante), Origin confiable y el limiter por IP; sin `SETUP_TOKEN` la configuración está deshabilitada, de modo que nadie puede reclamar una instancia recién publicada. El rol runtime tiene `INSERT` en `organizations` solo para este flujo.
+
+**Invitaciones.** `organization_invitations` e `invitations.manage` quedan modelados para un flujo futuro: token CSPRNG, hash-at-rest, expirable, single-use, bound a purpose/Organization/email y revocable; Owner invita cualquier role permitido y Admin solo Seller o Viewer.
 
 ## 37. Organization Switching
 
@@ -388,7 +370,7 @@ Current Organization se guarda server-side en Session para UX y cambia solo medi
 
 `organization_memberships.authorization_version` es una revisión monotónica local de la Membership, comienza en `1` e incrementa atómicamente ante todo cambio persistido que pueda alterar acceso efectivo: role, status o futuros permission overrides. El cambio y su Audit Record ocurren en la misma transacción. Cambiar el mapping code-defined mediante deployment no obliga a incrementar todas las Memberships.
 
-Cada request tenant-owned compara `Session.current_membership_authorization_version` con la versión vigente de la Membership. Un mismatch significa autorización stale y falla cerrado: no usa permisos anteriores, no refresca silenciosamente el snapshot y no actualiza automáticamente la Session. La Session requiere renovación explícita conforme al flujo que defina TEN-002. Esta política se aplica tanto a reducciones como a aumentos de privilegio; una Session anterior nunca obtiene acceso nuevo automáticamente.
+Cada request tenant-owned compara `Session.current_membership_authorization_version` con la versión vigente de la Membership. Un mismatch significa autorización stale y falla cerrado: no usa permisos anteriores, no refresca silenciosamente el snapshot y no actualiza automáticamente la Session. La Session se renueva iniciando sesión de nuevo con Auth0 (§38.1). Esta política se aplica tanto a reducciones como a aumentos de privilegio; una Session anterior nunca obtiene acceso nuevo automáticamente.
 
 Membership `Suspended` o `Revoked` siempre deniega, aunque la versión coincida. Status continúa siendo la autoridad primaria y el mismatch es una invalidación adicional. Todas las Sessions con un snapshot anterior quedan stale por comparación en cada request; correctness no depende de actualizarlas una por una.
 
@@ -396,53 +378,12 @@ Role, versión y permissions se resuelven exclusivamente desde la Membership de 
 
 Las futuras mutaciones de role/status deben ser transaccionales, evitar self-escalation, preservar al menos un Owner Active, incrementar la versión atómicamente y producir audit durable. El audit incluye actor interno, target Membership, Organization, previous/new role o status según policy sanitizada, cambio de versión y correlation/request ID; nunca tokens, cookies ni secrets. TEN-002A no implementa esas mutaciones ni el audit store.
 
-### 38.1. Explicit Session renewal (BCM-TEN-002D2)
+### 38.1. Session renewal
 
-`POST /api/auth/session/renew` accepts only `{ password }`. It requires the
-currently authenticated Session, the existing exact Origin/Referer policy and
-that Session's CSRF token. It requires no tenant authority or RBAC permission;
-both stale and non-stale authenticated Sessions may explicitly reauthenticate.
-Password verification reuses Identity's Argon2/password semantics without trim,
-normalization or truncation. Wrong credentials return generic `401
-INVALID_CREDENTIALS`; invalid Authentication returns `401 AUTHENTICATION_REQUIRED`.
-Transport errors, CSRF/Origin rejection, rate limiting and operational errors
-retain the existing safe 400/403/429/500 envelopes.
-
-Argon2 verification occurs outside the replacement transaction. Inside it, lock
-order is old Session `FOR UPDATE` → User `FOR SHARE` → password credential `FOR
-SHARE` → selected Membership `FOR SHARE` → shared Organization authority advisory
-lock. Recheck Session ID/User/token digest, revocation and absolute/idle expiry;
-require Active User and the exact credential hash that was verified. Credential
-changes before the locked comparison fail closed. Locks remain held through
-commit; future credential mutation flows must respect this order when also
-locking existing Sessions. Organization mutations use the matching exclusive
-TEN-001 advisory lock.
-
-Create a new opaque Session with a fresh lifetime and revoke only the old Session
-in one transaction. The old snapshot is never updated. Preserve only its selected
-Organization when Membership/User, Active status, role, version and Organization
-remain valid; otherwise both selection fields are NULL. No selection remains
-NULL, and renewal never chooses a different Organization. Normal tenant
-bootstrap/switching remains a separate capability. Competing renewal requests
-serialize on the old Session; only one may replace it. Rollback leaves no usable
-replacement or replacement cookie. Other Sessions remain untouched.
-
-Success is `204 No Content` with the existing Session cookie policy. The old
-token subsequently fails Authentication. `GET /api/auth/session` remains
-identity-only and bootstraps the new Session-bound CSRF token; old CSRF material
-does not authorize the replacement Session. PostgreSQL replacement is atomic,
-but delivery of the HTTP response is not: if the committed response is lost, the
-old token is revoked and the user may need to log in again.
-
-Renewal reuses the persistent credential-verification store (`Login` operation),
-existing thresholds and HMAC infrastructure. Network budgets are shared with
-login; User and User/network buckets use distinct renewal HMAC purposes and
-persist across Session rotation. Local network limiting also applies. No raw
-email/IP is stored or logged and no new datastore is introduced. Diagnostic
-events are `session.renewal.succeeded`, `.failed`, `.rate_limited` and
-`.selection_cleared`, correlated through existing request logging without
-credentials, token hashes or authority versions. Existing Pino audit hooks are
-not durable Audit Records; durable Identity audit remains future work.
+A stale Session is renewed by signing in again through Auth0. The callback
+creates a new Session whose authorization snapshot is resolved from current
+Membership state on its first tenant request; the stale Session never gains
+access and expires on its own schedule. No client value can refresh a snapshot.
 
 ### 38.2. RBAC closure review (BCM-TEN-002E)
 
@@ -456,12 +397,8 @@ with only `details.authorizationState = "stale"`; no role, permission, version
 or tenant cause is exposed. Neither a retry nor any client-provided identity,
 tenant, role, permission or version value can refresh stale authority.
 
-Explicit password renewal remains the sole Session replacement path. It is
-separate from tenant authority and RBAC, preserves the authenticated-Session
-and wrong-password HTTP distinction, and atomically replaces only the current
-Session. The closure review found no Blocker or High finding. It made one
-boundary hardening correction: renewal accepts `password` only as its own
-single request-body property.
+A new Auth0 login is the only way to obtain fresh authority. The closure review
+found no Blocker or High finding.
 
 ## 39. Sensitive Actions
 
@@ -531,7 +468,7 @@ Baseline antes del primer production deployment:
 - CSP probada en staging y luego enforcing; objetivo `default-src 'self'`, sin `unsafe-eval`, con allowlists/nonces ajustados al frontend real;
 - HSTS tras confirmar HTTPS en todo el dominio/subdominios aplicables;
 - `X-Content-Type-Options: nosniff`;
-- `Referrer-Policy: strict-origin-when-cross-origin` o más restrictiva en recovery;
+- `Referrer-Policy: strict-origin-when-cross-origin` o más restrictiva;
 - `Permissions-Policy` deshabilita capacidades no usadas;
 - `frame-ancestors` en CSP y/o `X-Frame-Options` legacy para impedir framing no autorizado;
 - headers/cache control específicos para respuestas sensibles.
@@ -619,7 +556,7 @@ Por operación sensible: caso permitido; sin Authentication → 401; autenticado
 
 ## 64. Authentication Testing
 
-Valid/invalid login, User Disabled, generic account response, session malformed/expired/revoked, logout y replay, idle/absolute timeout, token rotation, password rehash, recovery expiry/reuse/race, invitation binding/reuse, revocación tras password reset y brute-force/rate-limit behavior. Tests nunca imprimen secretos reales.
+Login contra un proveedor OIDC falso: subject vinculado, no vinculado y User Disabled; state ausente/replay, nonce, firma/issuer/audience/expiry inválidos; session malformed/expired/revoked, logout y replay, idle/absolute timeout, token rotation, configuración inicial única y concurrente, invitation binding/reuse y rate-limit behavior. Tests nunca usan el Auth0 real ni imprimen secretos reales.
 
 ## 65. File Security Testing
 
@@ -679,42 +616,46 @@ La confirmación visual nunca reemplaza control backend.
 
 ## 73. Account Enumeration
 
-Login y recovery responden genéricamente, por ejemplo: “Si la cuenta existe, se enviarán instrucciones”. Status/body y timing evitan diferencias obvias entre inexistente, disabled o válido. Rate limits no revelan contadores por cuenta; logs internos pueden distinguir casos sin exponerlos al cliente.
+El callback de login responde `access_denied` igual para un subject no vinculado y un User deshabilitado. El alta responde un único `PROVISIONING_CONFLICT` para conflictos de identidad global. Rate limits no revelan contadores por cuenta; logs internos pueden distinguir casos sin exponerlos al cliente.
 
 ## 74. Timing Attacks
 
-Password verification sigue camino comparable, usando un hash dummy calibrado cuando el User no existe. Hash/token/CSRF comparisons usan primitives constant-time de librerías mantenidas; no comparaciones caseras. Respuestas remotas no prometen tiempo idéntico, pero eliminan branches y diferencias evitables que faciliten enumeración.
+Hash/token/CSRF/setup-token comparisons usan primitives constant-time de librerías mantenidas; no comparaciones caseras. Respuestas remotas no prometen tiempo idéntico, pero eliminan branches y diferencias evitables que faciliten enumeración.
 
 ## 75. Token Generation
 
-Session, recovery, invitation y otros bearer tokens usan CSPRNG, al menos 128 bits de entropía efectiva y encoding URL-safe cuando corresponda. Son purpose/subject/expiry bound, hash-at-rest, single-use si el flujo lo exige y nunca IDs de recursos. Tokens no viajan en logs; URLs sensibles reducen Referrer/cache y expiran pronto.
+Session, OIDC transaction (`state`, `nonce`, `code_verifier`), invitation y otros bearer tokens usan CSPRNG, al menos 128 bits de entropía efectiva y encoding URL-safe cuando corresponda. Son purpose/subject/expiry bound, hash-at-rest, single-use si el flujo lo exige y nunca IDs de recursos. Tokens no viajan en logs; URLs sensibles reducen Referrer/cache y expiran pronto.
 
 ## 76. Security Decision Register
 
 | ID | Decision | Status | Rationale | Review Trigger |
 | --- | --- | --- | --- | --- |
-| SEC-DEC-001 | Argon2id versionado/calibrado | Accepted | memory-hard para sistema nuevo | benchmark/hardware o nueva guía |
+| SEC-DEC-001 | BCM no almacena contraseñas; Auth0 custodia credenciales y recuperación (ADR-008) | Accepted | proveedor especializado reduce superficie propia | cambio de proveedor |
 | SEC-DEC-002 | cookie HttpOnly/Secure/SameSite=Lax host-only | Accepted | sesión first-party con navegación externa legítima | domains/cross-site cambian |
 | SEC-DEC-003 | CSRF token + Origin/Referer + SameSite | Accepted | cookie auth requiere defensa dedicada | arquitectura browser cambia |
 | SEC-DEC-004 | RLS parcial operational, fail-closed | Accepted | defense in depth tenant | nuevas tablas/pooling/modelo tenant |
 | SEC-DEC-005 | RBAC code-defined por Membership | Accepted | simple, auditable, suficiente V1 | custom roles/ABAC requerido |
 | SEC-DEC-006 | private files + authorized short signed URL | Accepted | evita acceso directo/público | nuevo tipo de archivo/CDN público |
-| SEC-DEC-007 | rate limit local + estado identity persistente; adapter | Accepted | una instancia sin Redis y protección durable | segunda réplica/abuso sostenido |
+| SEC-DEC-007 | rate limit local por IP en endpoints de identidad; fuerza bruta en Auth0; adapter | Accepted | una instancia sin Redis | segunda réplica/abuso sostenido |
 | SEC-DEC-008 | MFA diferido; WebAuthn/TOTP futuro Owner/Admin | Deferred | no requisito V1, riesgo residual conocido | primer production review/incidente/cliente |
 | SEC-DEC-009 | verificación separada diferida; invitation acceptance verifica | Accepted V1 | provisioning administrado | self-signup o email sensible |
 | SEC-DEC-010 | sin Platform Super Admin universal | Accepted | least privilege y tenant isolation | soporte multi-tenant operativo |
-| SEC-DEC-011 | password 15–128, sin composition/expiry arbitrarios | Accepted | password-only V1, password managers | MFA obligatorio/nueva guía |
-| SEC-DEC-012 | PostgreSQL session store, token hash only | Accepted | ADR-006 y escala V1 | performance/replicas justifican otro store |
+| SEC-DEC-011 | política de contraseñas en la connection de Auth0: 15+, sin composición ni rotación forzada | Accepted | password managers, guía NIST | MFA obligatorio/nueva guía |
+| SEC-DEC-012 | PostgreSQL session store, token hash only | Accepted | ADR-008 y escala V1 | performance/replicas justifican otro store |
 | SEC-DEC-013 | 30m idle / 12h absolute configurables | Accepted | aplicación administrativa | evidencia UX/riesgo |
 | SEC-DEC-014 | session guarda current org pero revalida Membership | Accepted | switching claro sin confiar en client | cache/escala cambia |
-| SEC-DEC-015 | recovery/invitation tokens hash, brief, single-use | Accepted | limita robo/replay | identity provider externo |
+| SEC-DEC-015 | invitation tokens hash, brief, single-use | Accepted | limita robo/replay | flujo de invitaciones |
 | SEC-DEC-016 | secretos en provider secret manager | Accepted | no source/logs y rotación | elección de deployment |
 | SEC-DEC-017 | Audit append-only; lectura Owner/Admin | Accepted | trazabilidad con exposición limitada | rol auditor dedicado |
 | SEC-DEC-018 | security headers enforcing antes de production | Accepted | defensa browser baseline | frontend/origins definidos |
 | SEC-DEC-019 | lockfile, audit y review supply-chain | Accepted | reproducibilidad y riesgo de paquetes | CI/package manager definido |
 | SEC-DEC-020 | financial visibility separated by semantic permission | Accepted | Seller puede operar ventas/stock sin costos, profit o gastos | nueva matriz de roles o reporting |
 | SEC-DEC-021 | corrections, voids and write-offs require dedicated permissions | Accepted | acciones históricas/destructivas necesitan least privilege, reason y audit | implementación de cada capability |
-| SEC-DEC-022 | authorization-version mismatch falla cerrado y exige renovación explícita, sin snapshot auto-refresh | Accepted | impide conservar o adquirir privilegios con una Session stale | cambio del modelo de renovación/session o necesidad UX demostrada |
+| SEC-DEC-022 | authorization-version mismatch falla cerrado y exige un nuevo login, sin snapshot auto-refresh | Accepted | impide conservar o adquirir privilegios con una Session stale | cambio del modelo de renovación/session o necesidad UX demostrada |
+| SEC-DEC-023 | Auth0 verifica credenciales vía OIDC code + PKCE ejecutado por el API; BCM emite sus propias sesiones (ADR-008) | Accepted | proveedor especializado, sin tokens en JavaScript, sin registro abierto | cambio de proveedor, SSO enterprise o clientes no-browser |
+| SEC-DEC-024 | vínculo User↔subject solo en alta administrativa; login nunca vincula por email | Accepted | `email_verified` no es uniforme entre conexiones; evita toma de cuentas | provisioning self-service o conexiones enterprise |
+| SEC-DEC-025 | Audit Records con RLS forzada e INSERT-only para runtime; contexto de Organization transaction-local en `runAuthorized` | Accepted | §19–20 y §40 | `audit.read` o nuevas tablas tenant-owned |
+| SEC-DEC-026 | configuración inicial única protegida por `SETUP_TOKEN`; sin token, deshabilitada | Accepted | una instancia recién publicada no puede ser reclamada por terceros | provisioning de plataforma multi-tenant |
 
 ## 77. Security Controls Matrix
 
@@ -724,8 +665,8 @@ Session, recovery, invitation y otros bearer tokens usan CSPRNG, al menos 128 bi
 | tenant-aware FKs | cross-tenant relation | Database | Yes | constraint tests |
 | RLS candidates | leakage/raw query error | Database | Partial V1 | runtime-role DB tests |
 | RBAC deny-by-default | privilege escalation | Application | Yes | permission matrix tests |
-| Argon2id | offline cracking | Identity | Yes | config/hash/rehash tests |
-| login/recovery limiter | brute force/enumeration | API/Identity | Yes | threshold/concurrency tests |
+| credenciales en Auth0 | offline cracking | Identity provider | Yes | revisión de configuración del tenant |
+| Auth0 brute-force + limiter del callback | brute force/enumeration | Auth0/API | Yes | callback/limiter tests |
 | hashed opaque session | session DB theft | Identity/DB | Yes | storage inspection |
 | secure cookie | theft/CSRF | Browser | Yes | config/E2E test |
 | CSRF token + Origin | CSRF | Browser/API | Yes | negative API tests |
@@ -750,7 +691,7 @@ Sin necesidad demostrada no se introduce enterprise SSO/SAML, custom cryptograph
 
 ### Before first production deployment
 
-Authentication/session/recovery/invitation implementados y testeados; Argon2id/password blocklist; RBAC/tenant scoping/RLS y tests A/B; CSRF/CORS/cookies/HTTPS/headers; safe validation/errors/responses; file privacy/limits; audit/log redaction/correlation; rate limits de identidad; secret/environment separation; dependency/CI controls; backup/restore y incident playbook mínimos.
+Authentication/session/configuración inicial implementados y testeados; tenant de Auth0 endurecido (sign up deshabilitado, breached password detection, M2M mínimo); RBAC/tenant scoping/RLS y tests A/B; CSRF/CORS/cookies/HTTPS/headers; safe validation/errors/responses; file privacy/limits; audit/log redaction/correlation; rate limits de identidad; secret/environment separation; dependency/CI controls; backup/restore y incident playbook mínimos.
 
 ### Shortly after production
 
@@ -824,9 +765,9 @@ Las decisiones respetan el modular monolith, REST, server-side sessions, Postgre
 
 `DATABASE.md` registra como resueltos los cuatro puntos de persistencia que SECURITY había remitido a revisión:
 
-- password reset tokens e invitation tokens hash-at-rest;
+- invitation tokens hash-at-rest; sin contraseñas ni tokens de recuperación en BCM;
 - `authorization_version` de Membership y current Organization/version observada por Session;
-- estado persistente mínimo de rate limiting de identidad;
+- vínculo inmutable User↔subject del proveedor;
 - constraints, retención, índices y RLS/exclusión de esas tablas.
 
 Identity foundation fue implementada posteriormente sobre esa base revisada. Por lo tanto, ese prerrequisito de base de datos ya no está pendiente; las decisiones e implementaciones futuras de tenancy y RLS permanecen en Phase 4 / RG-04. Esta alineación no modifica las decisiones criptográficas, de sesiones ni de RLS.
@@ -836,7 +777,7 @@ Identity foundation fue implementada posteriormente sobre esa base revisada. Por
 Revisión realizada contra PRODUCT, DOMAIN completo, ARCHITECTURE, DATABASE y todos los ADRs:
 
 - tenant isolation: cubierto en Application, Persistence, constraints, RLS y tests;
-- sessions: hash-at-rest, cookies, timeout, rotation y revocation coherentes con ADR-006;
+- sessions: hash-at-rest, cookies, timeout, rotation y revocation coherentes con ADR-008;
 - RLS: fail-closed, transaction-local, roles separados y failure modes cubiertos;
 - files: privados, tenant-owned, validados, autorizados y no ejecutables;
 - financial integrity/destructive actions: permissions, history, locks, idempotency y audit;

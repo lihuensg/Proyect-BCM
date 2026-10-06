@@ -21,8 +21,9 @@ Los ADRs registran decisiones arquitectónicas importantes de BCM SOFT. Una deci
 | [ADR-003](ADR-003-postgresql.md) | PostgreSQL | Accepted |
 | [ADR-004](ADR-004-shared-database-multitenancy.md) | Shared Database Multi-Tenancy | Accepted |
 | [ADR-005](ADR-005-rest-api.md) | REST API | Accepted |
-| [ADR-006](ADR-006-server-side-sessions.md) | Server-Side Sessions | Accepted |
+| [ADR-006](ADR-006-server-side-sessions.md) | Server-Side Sessions | Superseded by ADR-008 |
 | [ADR-007](ADR-007-prisma.md) | Prisma ORM | Accepted |
+| [ADR-008](ADR-008-auth0-identity-provider.md) | Authentication: Auth0 and Server-Side Sessions | Accepted |
 
 ## Formato mínimo
 

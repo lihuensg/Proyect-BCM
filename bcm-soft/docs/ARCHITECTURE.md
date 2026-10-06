@@ -233,7 +233,7 @@ La decisión formal está en `docs/adr/ADR-005-rest-api.md`.
 
 | Módulo | Responsabilidad y ownership | Dependencias permitidas | Dependencias prohibidas |
 |---|---|---|---|
-| **Identity** | Credenciales, autenticación, sesiones y recuperación de acceso | Users, Audit mediante interfaces | Inventory, Sales o reglas comerciales |
+| **Identity** | Autenticación con Auth0, sesiones y vínculo con identidades externas | Users, Audit mediante interfaces | Inventory, Sales o reglas comerciales |
 | **Organizations** | Organization, Membership y Current Organization Context | Users, Audit | Datos comerciales internos de otros módulos |
 | **Users** | Identidad funcional y perfil de User | Organizations para memberships | Stock, ventas o reglas financieras |
 | **Authorization** | Policies, roles y permisos aplicados a Membership | Identity, Organizations | Decidir reglas de stock o venta |
@@ -342,11 +342,12 @@ La evaluación concreta de Row-Level Security se completa en Database Design y S
 - **Sesión server-side + cookie:** revocación y logout directos, credencial opaca fuera de JavaScript.
 - **JWT persistido en navegador:** reduce estado de sesión del servidor, pero aumenta exposición ante XSS y complica revocación.
 - **Access + refresh tokens:** útil para clientes múltiples o APIs externas; agrega rotación y estados de compromiso.
-- **Proveedor externo:** puede ser futuro si requisitos de SSO o identidad lo justifican.
+- **Contraseñas propias:** exige custodiar hashes, recuperación y protección contra fuerza bruta sin ventaja de negocio.
+- **Proveedor externo (Auth0):** credenciales, recuperación y MFA futura en un proveedor especializado.
 
 ### 11.2. Decisión
 
-V1 adopta **sesiones server-side** con identificador aleatorio opaco en una cookie `HttpOnly`, `Secure` y `SameSite` apropiada. La sesión se conserva inicialmente en PostgreSQL; no se introduce Redis para este fin.
+V1 adopta **Auth0** para verificar credenciales, mediante OIDC Authorization Code + PKCE ejecutado por el API, y **sesiones server-side** propias con identificador aleatorio opaco en una cookie `HttpOnly`, `Secure` y `SameSite` apropiada. La sesión se conserva en PostgreSQL; no se introduce Redis para este fin. No hay registro abierto: Owners/Admins dan de alta a los Users y la primera Organization se crea con una configuración inicial única.
 
 Requisitos arquitectónicos:
 
@@ -356,11 +357,12 @@ Requisitos arquitectónicos:
 - rotación de identificador tras autenticación o elevación sensible;
 - protección CSRF para requests que modifican estado;
 - cookies inaccesibles a JavaScript para reducir exposición ante XSS;
-- recuperación de contraseña mediante tokens de un solo uso, expirables y revocables;
+- ningún token del proveedor llega a JavaScript;
+- el User se resuelve solo por el subject del proveedor vinculado en el alta;
 - respuestas de login que no faciliten enumeración de usuarios;
-- proveedor externo como adapter futuro, sin acoplar el dominio.
+- el proveedor vive detrás de un adapter de Identity, sin acoplar el dominio.
 
-Políticas concretas, tiempos y flujos se definen en BCM-005. La decisión formal está en `docs/adr/ADR-006-server-side-sessions.md`.
+Políticas concretas, tiempos y flujos se definen en BCM-005. La decisión formal está en `docs/adr/ADR-008-auth0-identity-provider.md`.
 
 ## 12. Authorization
 
@@ -935,8 +937,9 @@ ADRs iniciales:
 - ADR-003 — PostgreSQL;
 - ADR-004 — Shared Database Multi-Tenancy;
 - ADR-005 — REST API;
-- ADR-006 — Server-Side Sessions;
-- ADR-007 — Prisma ORM.
+- ADR-006 — Server-Side Sessions (superseded by ADR-008);
+- ADR-007 — Prisma ORM;
+- ADR-008 — Authentication: Auth0 and Server-Side Sessions.
 
 ## 42. Explicit Non-Goals for V1
 
@@ -967,7 +970,7 @@ No bloquean BCM-003 y tienen una fase propietaria:
 | Decisión | Fase |
 |---|---|
 | Tablas, claves, constraints, RLS, isolation levels, locks, Money precision e índices | BCM-004 |
-| Roles/permisos exactos, tiempos de sesión, recuperación, CSRF detallado y amenazas | BCM-005 |
+| Roles/permisos exactos, tiempos de sesión, CSRF detallado y amenazas | BCM-005 |
 | Convenciones internas de backend y librerías auxiliares | BCM-006 |
 | Router, forms, server-state, accesibilidad y design implementation | BCM-007 |
 | Cobertura, fixtures, ambientes y quality gates | BCM-008 |

@@ -29,6 +29,11 @@ export class ApiClient {
     this.#onAuthenticationRequired = options.onAuthenticationRequired;
   }
 
+  /** Absolute URL for a browser navigation (not a fetch) to the API. */
+  url(path: `/${string}`): string {
+    return `${this.#baseUrl}${path}`;
+  }
+
   async requestJson<T>(
     path: `/${string}`,
     schema: ZodType<T>,

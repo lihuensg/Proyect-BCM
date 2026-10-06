@@ -207,6 +207,16 @@ export class PrismaTenantPersistenceScope<Repositories>
         );
         if (authorization.status !== "authorized") return authorization;
 
+        // Transaction-local (is_local = true): the RLS context ends with this
+        // transaction and never leaks to another request on a pooled connection.
+        await transaction.$queryRaw<Array<{ set_config: string }>>`
+          SELECT set_config(
+            'bcm.current_organization_id',
+            ${tenantContext.organizationId},
+            true
+          )
+        `;
+
         const lease = new TenantRepositoryScopeLease();
         try {
           const repositories = this.createRepositories(

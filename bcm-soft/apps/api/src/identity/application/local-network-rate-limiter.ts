@@ -1,7 +1,10 @@
 import type { RateLimitRuleConfig } from "../../config/server-config.js";
 import type { Clock } from "./clock.js";
-import type { LoginRateLimitResult } from "./login-rate-limiter.js";
 import type { NodeRateLimitFingerprint } from "../infrastructure/node-rate-limit-fingerprint.js";
+
+export type NetworkRateLimitResult =
+  | Readonly<{ allowed: true }>
+  | Readonly<{ allowed: false; retryAfterSeconds: number }>;
 
 type Entry = { count: number; windowStartedAt: number; blockedUntil: number };
 
@@ -15,7 +18,7 @@ export class LocalNetworkRateLimiter {
     private readonly maximumEntries = 10_000,
   ) {}
 
-  consume(clientIp: string): LoginRateLimitResult {
+  consume(clientIp: string): NetworkRateLimitResult {
     const now = this.clock.now().getTime();
     const key = this.fingerprints.network(clientIp).toString("hex");
     this.prune(now);
