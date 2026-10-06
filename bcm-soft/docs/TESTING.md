@@ -114,11 +114,11 @@ Además de RLS, manipular IDs de Equipment, Sale, Customer, Reservation, File y 
 
 ## 15. Authentication tests
 
-Cubrir credenciales válidas e inválidas, respuesta genérica para cuenta desconocida, User disabled, sesión expirada/revocada/malformed, logout, replay posterior, hash de token no plaintext, expiración absoluta e idle. Verificar rotación cuando corresponda y que nunca se imprimen secretos.
+Cubrir login contra un proveedor OIDC falso (nunca el Auth0 real): subject vinculado, no vinculado y User disabled con la misma respuesta; sesión expirada/revocada/malformed, logout, replay posterior, hash de token no plaintext, expiración absoluta e idle. Verificar rotación cuando corresponda y que nunca se imprimen secretos.
 
-## 16. Password tests
+## 16. External identity tests
 
-No probar internals criptográficos de Argon2. Verificar integración: password válida autentica, inválida falla, persistencia contiene hash no secreto, parámetros antiguos disparan rehash seguro y reset invalida sesiones/tokens conforme a SECURITY.
+BCM no maneja contraseñas. Con un tenant Auth0 falso sobre loopback (discovery, JWKS, token endpoint y Management API) verificar: PKCE y `state` obligatorios, rechazo de ID tokens con firma, issuer, audience, expiry o nonce inválidos, code de un solo uso, vínculo solo por subject, y alta/configuración inicial que crean cuenta, vínculo, Membership y Audit Record atómicamente o nada.
 
 ## 17. CSRF tests
 
@@ -204,9 +204,9 @@ Para acciones sensibles afirmar actor, Organization, action, entity, reason cuan
 
 Cubrir misma key + mismo request, duplicado secuencial, reutilización del resultado, misma key con payload/operación incompatible, scope independiente por Organization, autorización reevaluada y requests duplicadas concurrentes. Una key `InProgress` no permite doble ejecución y los efectos aparecen una sola vez.
 
-## 38. Recovery token tests
+## 38. Initial setup tests
 
-Token válido, expired, used, revoked y random invalid; segundo uso rechazado; solo hash persistido; reset invalida sesiones/tokens según policy; respuestas públicas permanecen genéricas. Incluir carrera de doble consumo para probar update condicional atómico.
+Configuración inicial con instancia vacía, token inválido, Origin no confiable, servidor sin `SETUP_TOKEN`, proveedor caído sin efectos y dos setups concurrentes donde solo uno gana.
 
 ## 39. Invitation tests
 
@@ -214,7 +214,7 @@ Cubrir válida, expired, revoked, email/Organization incorrectos, segunda acepta
 
 ## 40. Rate limiting tests
 
-Probar requests permitidas, threshold, 429, `Retry-After` cuando corresponda, expiry/reset de ventana e identity fingerprint por operación. Usar clock controlable, no sleeps. Las respuestas no deben permitir account enumeration y restart no debe borrar protección persistente cuando esa capa aplique.
+Probar requests permitidas, threshold, 429, `Retry-After` cuando corresponda y expiry/reset de ventana del limiter por IP. Usar clock controlable, no sleeps. Las respuestas no deben permitir account enumeration.
 
 ## 41. File tests
 
@@ -313,7 +313,7 @@ No depender de fecha real, random no controlado, orden de ejecución, servicios 
 
 ## 62. Clock testing
 
-Sessions, recovery/invitation tokens, rate windows y futura Reservation expiry usan un clock inyectable/fake. Avanzar tiempo explícitamente; no esperar tiempo real con `sleep`. En integration, fijar timestamps o probar el reloj DB mediante rangos solo cuando ese comportamiento sea el objetivo.
+Sessions, invitation tokens, transacciones OIDC, rate windows y futura Reservation expiry usan un clock inyectable/fake. Avanzar tiempo explícitamente; no esperar tiempo real con `sleep`. En integration, fijar timestamps o probar el reloj DB mediante rangos solo cuando ese comportamiento sea el objetivo.
 
 ## 63. Identifier determinism
 

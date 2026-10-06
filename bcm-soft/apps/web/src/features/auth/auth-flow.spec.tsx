@@ -34,7 +34,8 @@ function renderApp(
   initialPath: string,
   prepareServices?: (services: ReturnType<typeof createAppServices>) => void,
 ) {
-  const services = createAppServices({ apiBaseUrl: BASE_URL });
+  const navigateAway = vi.fn<(url: string) => void>();
+  const services = createAppServices({ apiBaseUrl: BASE_URL, navigateAway });
   prepareServices?.(services);
   const router = createMemoryRouter(appRoutes, {
     initialEntries: [initialPath],
@@ -44,7 +45,7 @@ function renderApp(
       <RouterProvider router={router} />
     </AppProviders>,
   );
-  return { router, services };
+  return { router, services, navigateAway };
 }
 
 describe("authentication bootstrap and login", () => {
@@ -92,277 +93,52 @@ describe("authentication bootstrap and login", () => {
     expect(cancelQueries).toHaveBeenCalledTimes(1);
   });
 
-  it("submits the password unchanged and authenticates only after bootstrap", async () => {
-    let authenticated = false;
-    const exactPassword = "  Clave con espacios 🔐  ";
-    testServer.use(
-      http.get(`${BASE_URL}/auth/session`, () =>
-        authenticated ? HttpResponse.json(SESSION) : authenticationRequired(),
-      ),
-      http.post(`${BASE_URL}/auth/login`, async ({ request }) => {
-        expect(request.headers.get("x-csrf-token")).toBeNull();
-        await expect(request.json()).resolves.toEqual({
-          email: "owner@bcm.test",
-          password: exactPassword,
-        });
-        authenticated = true;
-        return new HttpResponse(null, { status: 204 });
-      }),
-    );
-    const user = userEvent.setup();
-    renderApp("/login");
-
-    await user.type(await screen.findByLabelText("Email"), " owner@bcm.test ");
-    await user.type(screen.getByLabelText("Contraseña"), exactPassword);
-    await user.keyboard("{Enter}");
-
-    expect(
-      await screen.findByRole("heading", { name: "Sesión activa" }),
-    ).toBeDefined();
-  });
-
-  it("prevents a duplicate login while the first request is pending", async () => {
-    let loginRequests = 0;
-    let authenticated = false;
-    testServer.use(
-      http.get(`${BASE_URL}/auth/session`, () =>
-        authenticated ? HttpResponse.json(SESSION) : authenticationRequired(),
-      ),
-      http.post(`${BASE_URL}/auth/login`, async () => {
-        loginRequests += 1;
-        await delay(50);
-        authenticated = true;
-        return new HttpResponse(null, { status: 204 });
-      }),
-    );
-    const user = userEvent.setup();
-    renderApp("/login");
-
-    await user.type(await screen.findByLabelText("Email"), "owner@bcm.test");
-    await user.type(screen.getByLabelText("Contraseña"), "password");
-    const submit = screen.getByRole("button", { name: "Iniciar sesión" });
-    await user.dblClick(submit);
-
-    expect(
-      await screen.findByRole("heading", { name: "Sesión activa" }),
-    ).toBeDefined();
-    expect(loginRequests).toBe(1);
-  });
-
-  it("rejects an invalid email locally without sending credentials", async () => {
-    let loginRequests = 0;
+  it("starts login as a navigation to the API's Auth0 endpoint", async () => {
     testServer.use(
       http.get(`${BASE_URL}/auth/session`, () => authenticationRequired()),
-      http.post(`${BASE_URL}/auth/login`, () => {
-        loginRequests += 1;
-        return new HttpResponse(null, { status: 204 });
-      }),
     );
-    const user = userEvent.setup();
+
     renderApp("/login");
 
-    await user.type(await screen.findByLabelText("Email"), "invalid email");
-    await user.type(screen.getByLabelText("Contraseña"), "password");
-    await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
-
-    expect(await screen.findByText("Ingresá un email válido.")).toBeDefined();
-    expect(loginRequests).toBe(0);
+    const link = await screen.findByRole("link", { name: "Iniciar sesión" });
+    expect(link.getAttribute("href")).toBe(`${BASE_URL}/auth/auth0/start`);
+    expect(screen.queryByLabelText("Contraseña")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
-
-  it("keeps errors generic and clears only the password after invalid credentials", async () => {
-    testServer.use(
-      http.get(`${BASE_URL}/auth/session`, () => authenticationRequired()),
-      http.post(`${BASE_URL}/auth/login`, () =>
-        HttpResponse.json(
-          {
-            statusCode: 401,
-            code: "INVALID_CREDENTIALS",
-            message: "Las credenciales no son válidas.",
-            requestId: "request-login",
-          },
-          { status: 401 },
-        ),
-      ),
-    );
-    const user = userEvent.setup();
-    const { services } = renderApp("/login");
-    const email = await screen.findByLabelText<HTMLInputElement>("Email");
-    const password = screen.getByLabelText<HTMLInputElement>("Contraseña");
-    await services.sessionCoordinator.confirmSessionLoss();
-    services.queryClient.setQueryData(["private", "anonymous-draft"], {
-      value: "preserved",
-    });
-    const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
-
-    await user.type(email, "owner@bcm.test");
-    await user.type(password, "incorrect password");
-    await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
-
-    expect(
-      await screen.findByText("El email o la contraseña no son correctos."),
-    ).toBeDefined();
-    expect(email.value).toBe("owner@bcm.test");
-    expect(password.value).toBe("");
-    expect(
-      services.queryClient.getQueryData(["private", "anonymous-draft"]),
-    ).toEqual({ value: "preserved" });
-    expect(cancelQueries).not.toHaveBeenCalled();
-  });
-
-  it.each(["network", "server"] as const)(
-    "keeps login anonymous after a %s failure without a false session bootstrap",
-    async (failure) => {
-      let sessionRequests = 0;
-      testServer.use(
-        http.get(`${BASE_URL}/auth/session`, () => {
-          sessionRequests += 1;
-          return authenticationRequired();
-        }),
-        http.post(`${BASE_URL}/auth/login`, () =>
-          failure === "network"
-            ? HttpResponse.error()
-            : HttpResponse.json(
-                {
-                  statusCode: 500,
-                  code: "INTERNAL_SERVER_ERROR",
-                  message: "No pudimos completar la solicitud.",
-                  requestId: "request-login-server",
-                },
-                { status: 500 },
-              ),
-        ),
-      );
-      const user = userEvent.setup();
-      const { services } = renderApp("/login");
-      const email = await screen.findByLabelText<HTMLInputElement>("Email");
-      const password = screen.getByLabelText<HTMLInputElement>("Contraseña");
-      await services.sessionCoordinator.confirmSessionLoss();
-      const cancelQueries = vi.spyOn(services.queryClient, "cancelQueries");
-
-      await user.type(email, "owner@bcm.test");
-      await user.type(password, "password");
-      await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
-
-      expect(
-        await screen.findByText("No pudimos conectar con el servicio."),
-      ).toBeDefined();
-      expect(
-        screen.getByRole("heading", { name: "Ingresá a tu cuenta" }),
-      ).toBeDefined();
-      expect(email.value).toBe("owner@bcm.test");
-      expect(password.value).toBe("");
-      expect(sessionRequests).toBe(1);
-      expect(cancelQueries).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
-    [400, "INVALID_REQUEST", "Revisá los datos ingresados."],
     [
-      403,
-      "ORIGIN_VALIDATION_FAILED",
-      "No pudimos validar la solicitud. Intentá nuevamente.",
+      "access_denied",
+      "Tu cuenta no tiene acceso a BCM SOFT. Pedile a un administrador que te dé de alta.",
     ],
-  ])(
-    "maps a %i login response without ending the session",
-    async (status, code, message) => {
-      testServer.use(
-        http.get(`${BASE_URL}/auth/session`, () => authenticationRequired()),
-        http.post(`${BASE_URL}/auth/login`, () =>
-          HttpResponse.json(
-            {
-              statusCode: status,
-              code,
-              message: "Safe backend message",
-              requestId: "request",
-            },
-            { status },
-          ),
-        ),
-      );
-      const user = userEvent.setup();
-      renderApp("/login");
-
-      await user.type(await screen.findByLabelText("Email"), "owner@bcm.test");
-      const password = screen.getByLabelText<HTMLInputElement>("Contraseña");
-      await user.type(password, "password");
-      await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
-
-      expect(await screen.findByText(message)).toBeDefined();
-      expect(password.value).toBe("");
-    },
-  );
-
-  it("honors a bounded Retry-After as informational login UX", async () => {
+    ["login_failed", "No pudimos iniciar sesión. Intentá nuevamente."],
+    [
+      "rate_limited",
+      "Demasiados intentos. Esperá unos minutos e intentá nuevamente.",
+    ],
+    [
+      "unavailable",
+      "El inicio de sesión no está disponible en este momento. Intentá más tarde.",
+    ],
+  ])("explains the %s return from Auth0", async (code, message) => {
     testServer.use(
       http.get(`${BASE_URL}/auth/session`, () => authenticationRequired()),
-      http.post(`${BASE_URL}/auth/login`, () =>
-        HttpResponse.json(
-          {
-            statusCode: 429,
-            code: "TOO_MANY_REQUESTS",
-            message: "Demasiados intentos. Intentá nuevamente más tarde.",
-            requestId: "request-rate",
-          },
-          { status: 429, headers: { "Retry-After": "5" } },
-        ),
-      ),
     );
-    const user = userEvent.setup();
-    renderApp("/login");
 
-    await user.type(await screen.findByLabelText("Email"), "owner@bcm.test");
-    await user.type(screen.getByLabelText("Contraseña"), "password");
-    await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
+    renderApp(`/login?error=${code}`);
 
-    expect(
-      await screen.findByText(
-        "Demasiados intentos. Intentá nuevamente más tarde.",
-      ),
-    ).toBeDefined();
-    expect(
-      screen.getByText(/Podés volver a intentarlo en 5 segundos/),
-    ).toBeDefined();
-    expect(
-      screen
-        .getByRole("button", { name: "Iniciar sesión" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
-    expect(screen.getByLabelText<HTMLInputElement>("Contraseña").value).toBe(
-      "",
-    );
+    expect((await screen.findByRole("alert")).textContent).toBe(message);
   });
 
-  it("re-enables login when the informational Retry-After countdown ends", async () => {
+  it("ignores unknown or inherited error codes", async () => {
     testServer.use(
       http.get(`${BASE_URL}/auth/session`, () => authenticationRequired()),
-      http.post(`${BASE_URL}/auth/login`, () =>
-        HttpResponse.json(
-          {
-            statusCode: 429,
-            code: "TOO_MANY_REQUESTS",
-            message: "Demasiados intentos. Intentá nuevamente más tarde.",
-            requestId: "request-rate-short",
-          },
-          { status: 429, headers: { "Retry-After": "1" } },
-        ),
-      ),
     );
-    const user = userEvent.setup();
-    renderApp("/login");
 
-    await user.type(await screen.findByLabelText("Email"), "owner@bcm.test");
-    await user.type(screen.getByLabelText("Contraseña"), "password");
-    const submit = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Iniciar sesión",
-    });
-    await user.click(submit);
+    renderApp("/login?error=toString");
 
-    await screen.findByText(/Podés volver a intentarlo en 1 segundos/);
-    expect(submit.disabled).toBe(true);
-    await waitFor(() => expect(submit.disabled).toBe(false), {
-      timeout: 2_000,
-    });
+    await screen.findByRole("link", { name: "Iniciar sesión" });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("treats invalid session JSON as unavailable and supports retry", async () => {
@@ -429,26 +205,15 @@ describe("authentication bootstrap and login", () => {
 });
 
 describe("logout and cache isolation", () => {
-  it("isolates User B after an authenticated session refetch loses User A", async () => {
-    const userBSession = {
-      ...SESSION,
-      user: { id: "019c8f52-97d3-7000-8000-000000000002" },
-      csrfToken: `v1.${"B".repeat(43)}`,
-    } as const;
-    let identity: "user-a" | "anonymous" | "user-b" = "user-a";
+  it("clears User A data and returns to login after a session refetch loses User A", async () => {
+    let identity: "user-a" | "anonymous" = "user-a";
     testServer.use(
-      http.get(`${BASE_URL}/auth/session`, () => {
-        if (identity === "anonymous") return authenticationRequired();
-        return HttpResponse.json(
-          identity === "user-a" ? SESSION : userBSession,
-        );
-      }),
-      http.post(`${BASE_URL}/auth/login`, () => {
-        identity = "user-b";
-        return new HttpResponse(null, { status: 204 });
-      }),
+      http.get(`${BASE_URL}/auth/session`, () =>
+        identity === "anonymous"
+          ? authenticationRequired()
+          : HttpResponse.json(SESSION),
+      ),
     );
-    const user = userEvent.setup();
     const { router, services } = renderApp("/");
 
     await screen.findByRole("heading", { name: "Sesión activa" });
@@ -463,6 +228,7 @@ describe("logout and cache isolation", () => {
       });
     });
 
+    // User B then signs in through Auth0, a full page load with a new cache.
     await screen.findByRole("heading", { name: "Ingresá a tu cuenta" });
     expect(router.state.location.pathname).toBe("/login");
     await waitFor(() => {
@@ -471,19 +237,6 @@ describe("logout and cache isolation", () => {
       ).toBeUndefined();
     });
     expect(cancelQueries).toHaveBeenCalledTimes(1);
-
-    await user.type(screen.getByLabelText("Email"), "user-b@bcm.test");
-    await user.type(screen.getByLabelText("Contraseña"), "user-b-password");
-    await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
-
-    await screen.findByRole("heading", { name: "Sesión activa" });
-    expect(
-      services.queryClient.getQueryData(["org", "org-a", "private-resource"]),
-    ).toBeUndefined();
-    expect(services.queryClient.getQueryData(authKeys.session)).toEqual({
-      status: "authenticated",
-      session: userBSession,
-    });
   });
 
   it("sends CSRF, clears every cached user value, and returns to login", async () => {
@@ -499,7 +252,7 @@ describe("logout and cache isolation", () => {
       }),
     );
     const user = userEvent.setup();
-    const { services } = renderApp("/");
+    const { services, navigateAway } = renderApp("/");
 
     await screen.findByRole("heading", { name: "Sesión activa" });
     services.queryClient.setQueryData(["org", "organization-a", "inventory"], {
@@ -513,6 +266,10 @@ describe("logout and cache isolation", () => {
     expect(
       services.queryClient.getQueryData(["org", "organization-a", "inventory"]),
     ).toBeUndefined();
+    // Only after BCM revoked the Session does the browser end Auth0's SSO.
+    expect(navigateAway).toHaveBeenCalledExactlyOnceWith(
+      `${BASE_URL}/auth/auth0/logout`,
+    );
   });
 
   it("keeps the session and refreshes CSRF once after a CSRF 403 without replay", async () => {

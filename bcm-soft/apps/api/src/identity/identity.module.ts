@@ -4,54 +4,53 @@ import type { ServerConfig } from "../config/server-config.js";
 import { PrismaClientLifecycle } from "../infrastructure/database/prisma-client-lifecycle.js";
 import { generateUuidV7 } from "../infrastructure/identifiers/uuid-v7.js";
 import type { PinoLoggerAdapter } from "../observability/pino-logger.adapter.js";
-import { CredentialAuthenticator } from "./application/credential-authenticator.js";
-import type { CredentialRepository } from "./application/credential-repository.js";
+import type { Clock } from "./application/clock.js";
+import {
+  type ExternalIdentityProvider,
+  type ExternalIdentityRepository,
+  ExternalLoginUseCase,
+} from "./application/external-login-use-case.js";
 import type { IdentityAudit } from "./application/identity-audit.js";
-import { LoginUseCase } from "./application/login-use-case.js";
+import { LocalNetworkRateLimiter } from "./application/local-network-rate-limiter.js";
 import { LogoutUseCase } from "./application/logout-use-case.js";
-import type { PasswordHasher } from "./application/password-hasher.js";
-import type { SessionRepository } from "./application/session-repository.js";
 import { SessionBootstrapUseCase } from "./application/session-bootstrap-use-case.js";
+import type { SessionRepository } from "./application/session-repository.js";
 import { SessionService } from "./application/session-service.js";
 import type { SessionTokenService } from "./application/session-token-service.js";
-import type { Clock } from "./application/clock.js";
-import { Argon2PasswordHasher } from "./infrastructure/argon2-password-hasher.js";
+import type { ExternalAccountDirectory } from "./application/user-provisioning.js";
+import { Auth0ManagementDirectory } from "./infrastructure/auth0-management-directory.js";
+import { Auth0OidcProvider } from "./infrastructure/auth0-oidc-provider.js";
+import { NodeCsrfTokenService } from "./infrastructure/node-csrf-token-service.js";
+import { NodeRateLimitFingerprint } from "./infrastructure/node-rate-limit-fingerprint.js";
 import { NodeSessionTokenService } from "./infrastructure/node-session-token-service.js";
 import { PinoIdentityAudit } from "./infrastructure/pino-identity-audit.js";
-import { PrismaCredentialRepository } from "./infrastructure/prisma-credential-repository.js";
+import { PrismaExternalIdentityRepository } from "./infrastructure/prisma-external-identity-repository.js";
 import { PrismaSessionRepository } from "./infrastructure/prisma-session-repository.js";
 import { SystemClock } from "./infrastructure/system-clock.js";
 import { AuthController } from "./presentation/auth.controller.js";
+import {
+  AUTH0_CONFIG,
+  EXTERNAL_IDENTITY_PROVIDER,
+  ExternalAuthController,
+} from "./presentation/external-auth.controller.js";
+import { ExternalLoginTransactionCodec } from "./presentation/external-login-transaction-codec.js";
 import { SessionCookieCodec } from "./presentation/session-cookie-codec.js";
-import { NodeCsrfTokenService } from "./infrastructure/node-csrf-token-service.js";
-import { NodeRateLimitFingerprint } from "./infrastructure/node-rate-limit-fingerprint.js";
-import { PrismaLoginRateLimitStore } from "./infrastructure/prisma-login-rate-limit-store.js";
-import { PersistentLoginRateLimiter } from "./application/persistent-login-rate-limiter.js";
-import { LocalNetworkRateLimiter } from "./application/local-network-rate-limiter.js";
-import type {
-  LoginRateLimiter,
-  LoginRateLimitStore,
-  PasswordReauthenticationRateLimiter,
-} from "./application/login-rate-limiter.js";
+import { StateChangeGuard } from "./presentation/state-change.guard.js";
 import { TrustedOriginValidator } from "./presentation/trusted-origin-validator.js";
-import { SessionRenewalService } from "./application/session-renewal-service.js";
-import type { SessionSnapshotFactory } from "./infrastructure/prisma-session-repository.js";
+
+export const EXTERNAL_ACCOUNT_DIRECTORY = Symbol("ExternalAccountDirectory");
 
 const CLOCK = Symbol("Clock");
-const CREDENTIAL_REPOSITORY = Symbol("CredentialRepository");
 const IDENTITY_AUDIT = Symbol("IdentityAudit");
-const PASSWORD_HASHER = Symbol("PasswordHasher");
 const SESSION_REPOSITORY = Symbol("SessionRepository");
 const SESSION_TOKEN_SERVICE = Symbol("SessionTokenService");
-const LOGIN_RATE_LIMITER = Symbol("LoginRateLimiter");
-const LOGIN_RATE_LIMIT_STORE = Symbol("LoginRateLimitStore");
+const EXTERNAL_IDENTITY_REPOSITORY = Symbol("ExternalIdentityRepository");
 
 @Module({})
 export class IdentityModule {
   static register(
     config: ServerConfig,
     logger: PinoLoggerAdapter,
-    snapshots: SessionSnapshotFactory,
   ): DynamicModule {
     const providers: Provider[] = [
       {
@@ -60,41 +59,23 @@ export class IdentityModule {
       },
       { provide: CLOCK, useFactory: () => new SystemClock() },
       {
-        provide: PASSWORD_HASHER,
-        useFactory: () => new Argon2PasswordHasher(),
-      },
-      {
         provide: SESSION_TOKEN_SERVICE,
         useFactory: () => new NodeSessionTokenService(),
-      },
-      {
-        provide: CREDENTIAL_REPOSITORY,
-        inject: [PrismaClientLifecycle],
-        useFactory: (lifecycle: PrismaClientLifecycle): CredentialRepository =>
-          new PrismaCredentialRepository(lifecycle.client),
       },
       {
         provide: SESSION_REPOSITORY,
         inject: [PrismaClientLifecycle],
         useFactory: (lifecycle: PrismaClientLifecycle): SessionRepository =>
-          new PrismaSessionRepository(lifecycle.client, snapshots),
+          new PrismaSessionRepository(lifecycle.client),
       },
       {
         provide: IDENTITY_AUDIT,
         useFactory: (): IdentityAudit => new PinoIdentityAudit(logger),
       },
-      {
-        provide: PinoIdentityAudit,
-        useExisting: IDENTITY_AUDIT,
-      },
+      { provide: PinoIdentityAudit, useExisting: IDENTITY_AUDIT },
       {
         provide: NodeCsrfTokenService,
         useFactory: () => new NodeCsrfTokenService(config.security.csrfHmacKey),
-      },
-      {
-        provide: NodeRateLimitFingerprint,
-        useFactory: () =>
-          new NodeRateLimitFingerprint(config.security.rateLimitHmacKey),
       },
       {
         provide: TrustedOriginValidator,
@@ -102,41 +83,14 @@ export class IdentityModule {
           new TrustedOriginValidator(config.security.trustedOrigins),
       },
       {
-        provide: LOGIN_RATE_LIMIT_STORE,
-        inject: [PrismaClientLifecycle],
-        useFactory: (lifecycle: PrismaClientLifecycle): LoginRateLimitStore =>
-          new PrismaLoginRateLimitStore(lifecycle.client),
-      },
-      {
-        provide: LOGIN_RATE_LIMITER,
-        inject: [LOGIN_RATE_LIMIT_STORE, NodeRateLimitFingerprint, CLOCK],
-        useFactory: (
-          store: LoginRateLimitStore,
-          fingerprints: NodeRateLimitFingerprint,
-          clock: Clock,
-        ): LoginRateLimiter =>
-          new PersistentLoginRateLimiter(
-            store,
-            fingerprints,
-            clock,
-            config.security.loginRateLimits,
-          ),
-      },
-      {
         provide: LocalNetworkRateLimiter,
-        inject: [NodeRateLimitFingerprint, CLOCK],
-        useFactory: (fingerprints: NodeRateLimitFingerprint, clock: Clock) =>
+        inject: [CLOCK],
+        useFactory: (clock: Clock) =>
           new LocalNetworkRateLimiter(
-            fingerprints,
+            new NodeRateLimitFingerprint(config.security.rateLimitHmacKey),
             clock,
-            config.security.loginRateLimits.network,
+            config.security.networkRateLimit,
           ),
-      },
-      {
-        provide: CredentialAuthenticator,
-        inject: [PASSWORD_HASHER],
-        useFactory: (passwordHasher: PasswordHasher) =>
-          new CredentialAuthenticator(passwordHasher),
       },
       {
         provide: SessionService,
@@ -152,65 +106,6 @@ export class IdentityModule {
             clock,
             generateUuidV7,
             config.session,
-          ),
-      },
-      {
-        provide: LoginUseCase,
-        inject: [
-          CREDENTIAL_REPOSITORY,
-          CredentialAuthenticator,
-          PASSWORD_HASHER,
-          SessionService,
-          CLOCK,
-          IDENTITY_AUDIT,
-          LOGIN_RATE_LIMITER,
-        ],
-        useFactory: (
-          credentials: CredentialRepository,
-          authenticator: CredentialAuthenticator,
-          passwordHasher: PasswordHasher,
-          sessions: SessionService,
-          clock: Clock,
-          audit: IdentityAudit,
-          rateLimiter: LoginRateLimiter,
-        ) =>
-          new LoginUseCase(
-            credentials,
-            authenticator,
-            passwordHasher,
-            sessions,
-            clock,
-            audit,
-            rateLimiter,
-          ),
-      },
-      {
-        provide: SessionRenewalService,
-        inject: [
-          SESSION_REPOSITORY,
-          CredentialAuthenticator,
-          LOGIN_RATE_LIMITER,
-          SESSION_TOKEN_SERVICE,
-          CLOCK,
-          PinoIdentityAudit,
-        ],
-        useFactory: (
-          repository: PrismaSessionRepository,
-          authenticator: CredentialAuthenticator,
-          limiter: PasswordReauthenticationRateLimiter,
-          tokens: SessionTokenService,
-          clock: Clock,
-          audit: PinoIdentityAudit,
-        ) =>
-          new SessionRenewalService(
-            repository,
-            authenticator,
-            limiter,
-            tokens,
-            clock,
-            generateUuidV7,
-            config.session,
-            audit,
           ),
       },
       {
@@ -233,13 +128,69 @@ export class IdentityModule {
         useFactory: (tokens: SessionTokenService) =>
           new SessionCookieCodec(config.sessionCookie, tokens),
       },
+      { provide: AUTH0_CONFIG, useValue: config.auth0 },
+      {
+        provide: EXTERNAL_IDENTITY_PROVIDER,
+        useFactory: (): ExternalIdentityProvider =>
+          new Auth0OidcProvider(config.auth0),
+      },
+      {
+        provide: EXTERNAL_ACCOUNT_DIRECTORY,
+        useFactory: (): ExternalAccountDirectory =>
+          new Auth0ManagementDirectory(config.auth0),
+      },
+      {
+        provide: EXTERNAL_IDENTITY_REPOSITORY,
+        inject: [PrismaClientLifecycle],
+        useFactory: (
+          lifecycle: PrismaClientLifecycle,
+        ): ExternalIdentityRepository =>
+          new PrismaExternalIdentityRepository(lifecycle.client),
+      },
+      {
+        provide: ExternalLoginUseCase,
+        inject: [
+          EXTERNAL_IDENTITY_PROVIDER,
+          EXTERNAL_IDENTITY_REPOSITORY,
+          SessionService,
+          PinoIdentityAudit,
+        ],
+        useFactory: (
+          provider: ExternalIdentityProvider,
+          identities: ExternalIdentityRepository,
+          sessions: SessionService,
+          audit: PinoIdentityAudit,
+        ) => new ExternalLoginUseCase(provider, identities, sessions, audit),
+      },
+      {
+        provide: ExternalLoginTransactionCodec,
+        inject: [CLOCK],
+        useFactory: (clock: Clock) =>
+          new ExternalLoginTransactionCodec(
+            config.sessionCookie,
+            config.security.csrfHmacKey,
+            clock,
+          ),
+      },
+      StateChangeGuard,
     ];
 
     return {
       module: IdentityModule,
-      controllers: [AuthController],
+      controllers: [AuthController, ExternalAuthController],
       providers,
-      exports: [PrismaClientLifecycle, SessionService, SessionCookieCodec],
+      exports: [
+        PrismaClientLifecycle,
+        SessionService,
+        SessionCookieCodec,
+        PinoIdentityAudit,
+        // StateChangeGuard runs in consumer modules and needs these there.
+        TrustedOriginValidator,
+        NodeCsrfTokenService,
+        LocalNetworkRateLimiter,
+        StateChangeGuard,
+        EXTERNAL_ACCOUNT_DIRECTORY,
+      ],
     };
   }
 }

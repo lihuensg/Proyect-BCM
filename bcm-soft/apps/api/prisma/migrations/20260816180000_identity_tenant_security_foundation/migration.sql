@@ -28,18 +28,18 @@ CREATE TABLE "users" (
     CONSTRAINT "uq_users__email_normalized" UNIQUE ("email_normalized")
 );
 
-CREATE TABLE "user_password_credentials" (
+CREATE TABLE "user_external_identities" (
+    "id" UUID NOT NULL,
     "user_id" UUID NOT NULL,
-    "password_hash" TEXT NOT NULL,
-    "password_changed_at" TIMESTAMPTZ(3) NOT NULL,
+    "provider" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
     "created_at" TIMESTAMPTZ(3) NOT NULL,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL,
 
-    CONSTRAINT "pk_user_password_credentials" PRIMARY KEY ("user_id"),
-    CONSTRAINT "ck_user_password_credentials__password_hash_nonempty" CHECK (length("password_hash") > 0),
-    CONSTRAINT "ck_user_password_credentials__timestamps" CHECK (
-        "password_changed_at" >= "created_at" AND "updated_at" >= "created_at"
-    )
+    CONSTRAINT "pk_user_external_identities" PRIMARY KEY ("id"),
+    CONSTRAINT "ck_user_external_identities__provider" CHECK ("provider" IN ('auth0')),
+    CONSTRAINT "ck_user_external_identities__subject_length" CHECK (length("subject") BETWEEN 1 AND 255),
+    CONSTRAINT "uq_user_external_identities__provider_subject" UNIQUE ("provider", "subject"),
+    CONSTRAINT "uq_user_external_identities__user_id_provider" UNIQUE ("user_id", "provider")
 );
 
 CREATE TABLE "organization_memberships" (
@@ -92,26 +92,6 @@ CREATE TABLE "sessions" (
     CONSTRAINT "uq_sessions__token_hash" UNIQUE ("token_hash")
 );
 
-CREATE TABLE "password_recovery_tokens" (
-    "id" UUID NOT NULL,
-    "user_id" UUID NOT NULL,
-    "token_hash" BYTEA NOT NULL,
-    "expires_at" TIMESTAMPTZ(3) NOT NULL,
-    "used_at" TIMESTAMPTZ(3),
-    "revoked_at" TIMESTAMPTZ(3),
-    "created_at" TIMESTAMPTZ(3) NOT NULL,
-
-    CONSTRAINT "pk_password_recovery_tokens" PRIMARY KEY ("id"),
-    CONSTRAINT "ck_password_recovery_tokens__token_hash_length" CHECK (octet_length("token_hash") = 32),
-    CONSTRAINT "ck_password_recovery_tokens__lifecycle" CHECK (
-        "expires_at" > "created_at"
-        AND ("used_at" IS NULL OR "used_at" >= "created_at")
-        AND ("revoked_at" IS NULL OR "revoked_at" >= "created_at")
-        AND NOT ("used_at" IS NOT NULL AND "revoked_at" IS NOT NULL)
-    ),
-    CONSTRAINT "uq_password_recovery_tokens__token_hash" UNIQUE ("token_hash")
-);
-
 CREATE TABLE "organization_invitations" (
     "id" UUID NOT NULL,
     "organization_id" UUID NOT NULL,
@@ -143,33 +123,6 @@ CREATE TABLE "organization_invitations" (
     CONSTRAINT "uq_organization_invitations__token_hash" UNIQUE ("token_hash")
 );
 
-CREATE TABLE "identity_rate_limit_windows" (
-    "id" UUID NOT NULL,
-    "operation" TEXT NOT NULL,
-    "dimension" TEXT NOT NULL,
-    "key_fingerprint" BYTEA NOT NULL,
-    "fingerprint_version" INTEGER NOT NULL,
-    "window_started_at" TIMESTAMPTZ(3) NOT NULL,
-    "expires_at" TIMESTAMPTZ(3) NOT NULL,
-    "blocked_until" TIMESTAMPTZ(3),
-    "attempt_count" INTEGER NOT NULL,
-    "created_at" TIMESTAMPTZ(3) NOT NULL,
-    "updated_at" TIMESTAMPTZ(3) NOT NULL,
-
-    CONSTRAINT "pk_identity_rate_limit_windows" PRIMARY KEY ("id"),
-    CONSTRAINT "ck_identity_rate_limit_windows__operation" CHECK ("operation" IN ('Login', 'PasswordRecovery', 'Invitation')),
-    CONSTRAINT "ck_identity_rate_limit_windows__dimension" CHECK ("dimension" IN ('Identity', 'Network', 'IdentityNetwork')),
-    CONSTRAINT "ck_identity_rate_limit_windows__fingerprint_version" CHECK ("fingerprint_version" >= 1),
-    CONSTRAINT "ck_identity_rate_limit_windows__attempt_count" CHECK ("attempt_count" >= 0),
-    CONSTRAINT "ck_identity_rate_limit_windows__lifecycle" CHECK (
-        octet_length("key_fingerprint") > 0
-        AND "expires_at" > "window_started_at"
-        AND ("blocked_until" IS NULL OR "blocked_until" > "window_started_at")
-        AND "updated_at" >= "created_at"
-    ),
-    CONSTRAINT "uq_identity_rate_limit_windows__logical_window" UNIQUE ("operation", "dimension", "key_fingerprint", "window_started_at")
-);
-
 CREATE INDEX "ix_organization_memberships__user_id_status"
 ON "organization_memberships" ("user_id", "status");
 
@@ -181,12 +134,6 @@ ON "sessions" ("expires_at");
 
 CREATE INDEX "ix_sessions__current_organization_id_user_id"
 ON "sessions" ("current_organization_id", "user_id");
-
-CREATE INDEX "ix_password_recovery_tokens__user_id_created_at"
-ON "password_recovery_tokens" ("user_id", "created_at" DESC);
-
-CREATE INDEX "ix_password_recovery_tokens__expires_at"
-ON "password_recovery_tokens" ("expires_at");
 
 CREATE INDEX "ix_organization_invitations__organization_email_lifecycle"
 ON "organization_invitations" ("organization_id", "intended_email_normalized", "accepted_at", "revoked_at");
@@ -207,11 +154,8 @@ CREATE UNIQUE INDEX "ux_organization_invitations__pending_email"
 ON "organization_invitations" ("organization_id", "intended_email_normalized")
 WHERE "accepted_at" IS NULL AND "revoked_at" IS NULL;
 
-CREATE INDEX "ix_identity_rate_limit_windows__expires_at"
-ON "identity_rate_limit_windows" ("expires_at");
-
-ALTER TABLE "user_password_credentials"
-ADD CONSTRAINT "fk_user_password_credentials__user_id__users"
+ALTER TABLE "user_external_identities"
+ADD CONSTRAINT "fk_user_external_identities__user_id__users"
 FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 ALTER TABLE "organization_memberships"
@@ -231,10 +175,6 @@ ADD CONSTRAINT "fk_sessions__current_membership__organization_memberships"
 FOREIGN KEY ("current_organization_id", "user_id")
 REFERENCES "organization_memberships"("organization_id", "user_id")
 ON DELETE RESTRICT ON UPDATE CASCADE;
-
-ALTER TABLE "password_recovery_tokens"
-ADD CONSTRAINT "fk_password_recovery_tokens__user_id__users"
-FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 ALTER TABLE "organization_invitations"
 ADD CONSTRAINT "fk_organization_invitations__organization_id__organizations"

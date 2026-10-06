@@ -7,22 +7,25 @@ import { assertSafeTestDatabaseTarget } from "../../../src/infrastructure/databa
 import { generateUuidV7 } from "../../../src/infrastructure/identifiers/uuid-v7.js";
 
 const expectedTables = [
-  "identity_rate_limit_windows",
+  "audit_records",
   "organization_invitations",
   "organization_memberships",
   "organizations",
-  "password_recovery_tokens",
   "sessions",
-  "user_password_credentials",
+  "user_external_identities",
   "users",
 ];
 
 const expectedConstraints = [
-  "ck_identity_rate_limit_windows__attempt_count",
-  "ck_identity_rate_limit_windows__dimension",
-  "ck_identity_rate_limit_windows__fingerprint_version",
-  "ck_identity_rate_limit_windows__lifecycle",
-  "ck_identity_rate_limit_windows__operation",
+  "ck_audit_records__action",
+  "ck_audit_records__after_object",
+  "ck_audit_records__before_object",
+  "ck_audit_records__correlation_id_length",
+  "ck_audit_records__entity_type",
+  "ck_audit_records__reason_length",
+  "fk_audit_records__actor_user_id__users",
+  "fk_audit_records__organization_id__organizations",
+  "pk_audit_records",
   "ck_organization_invitations__email_nonempty",
   "ck_organization_invitations__intended_role",
   "ck_organization_invitations__lifecycle",
@@ -34,13 +37,11 @@ const expectedConstraints = [
   "ck_organizations__name_nonempty",
   "ck_organizations__status",
   "ck_organizations__timestamps",
-  "ck_password_recovery_tokens__lifecycle",
-  "ck_password_recovery_tokens__token_hash_length",
   "ck_sessions__current_membership_context",
   "ck_sessions__lifecycle",
   "ck_sessions__token_hash_length",
-  "ck_user_password_credentials__password_hash_nonempty",
-  "ck_user_password_credentials__timestamps",
+  "ck_user_external_identities__provider",
+  "ck_user_external_identities__subject_length",
   "ck_users__email_nonempty",
   "ck_users__email_normalized_nonempty",
   "ck_users__status",
@@ -50,36 +51,32 @@ const expectedConstraints = [
   "fk_organization_invitations__organization_id__organizations",
   "fk_organization_memberships__organization_id__organizations",
   "fk_organization_memberships__user_id__users",
-  "fk_password_recovery_tokens__user_id__users",
   "fk_sessions__current_membership__organization_memberships",
   "fk_sessions__user_id__users",
-  "fk_user_password_credentials__user_id__users",
-  "pk_identity_rate_limit_windows",
+  "fk_user_external_identities__user_id__users",
   "pk_organization_invitations",
   "pk_organization_memberships",
   "pk_organizations",
-  "pk_password_recovery_tokens",
   "pk_sessions",
-  "pk_user_password_credentials",
+  "pk_user_external_identities",
   "pk_users",
-  "uq_identity_rate_limit_windows__logical_window",
   "uq_organization_memberships__organization_id_user_id",
   "uq_organization_invitations__token_hash",
-  "uq_password_recovery_tokens__token_hash",
   "uq_sessions__token_hash",
+  "uq_user_external_identities__provider_subject",
+  "uq_user_external_identities__user_id_provider",
   "uq_users__email_normalized",
 ];
 
 const expectedIndexes = [
-  "ix_identity_rate_limit_windows__expires_at",
+  "ix_audit_records__actor_user_id",
+  "ix_audit_records__organization_occurred_at_id",
   "ix_organization_invitations__accepted_by_user_id",
   "ix_organization_invitations__expires_at",
   "ix_organization_invitations__invited_by_user_id",
   "ix_organization_invitations__organization_created_at_id",
   "ix_organization_invitations__organization_email_lifecycle",
   "ix_organization_memberships__user_id_status",
-  "ix_password_recovery_tokens__expires_at",
-  "ix_password_recovery_tokens__user_id_created_at",
   "ix_sessions__current_organization_id_user_id",
   "ix_sessions__expires_at",
   "ix_sessions__user_id_revoked_at",
@@ -156,7 +153,7 @@ describe("identity and tenant security persistence foundation", () => {
     return id;
   }
 
-  it("materializes exactly the eight approved tables, physical types, constraints, and indexes", async () => {
+  it("materializes exactly the seven approved tables, physical types, constraints, and indexes", async () => {
     const tables = await sqlClient.query<{ table_name: string }>(`
       SELECT table_name
       FROM information_schema.tables
@@ -233,13 +230,6 @@ describe("identity and tenant security persistence foundation", () => {
     expect(indexes.rows.map(({ indexname }) => indexname)).toEqual(
       expect.arrayContaining(expectedIndexes),
     );
-
-    const limiterColumns = columns.rows
-      .filter(({ table_name }) => table_name === "identity_rate_limit_windows")
-      .map(({ column_name }) => column_name);
-    expect(limiterColumns).not.toEqual(
-      expect.arrayContaining(["email", "ip", "user_agent"]),
-    );
   });
 
   it("stores application-owned UUIDv7 identifiers and enforces global normalized email uniqueness", async () => {
@@ -301,25 +291,6 @@ describe("identity and tenant security persistence foundation", () => {
     );
   });
 
-  it("enforces one password credential per User without implementing password behavior", async () => {
-    const userId = await insertUser();
-    const insertCredential = `INSERT INTO user_password_credentials
-      (user_id, password_hash, password_changed_at, created_at, updated_at)
-      VALUES ($1::uuid, '$phc$synthetic$credential-hash', now(), now(), now())`;
-    await sqlClient.query(insertCredential, [userId]);
-
-    await expectConstraintViolation(
-      insertCredential,
-      [userId],
-      "pk_user_password_credentials",
-    );
-    await expectConstraintViolation(
-      insertCredential,
-      [generateUuidV7()],
-      "fk_user_password_credentials__user_id__users",
-    );
-  });
-
   it("enforces Session digest, lifecycle, context coherence, and structural Membership", async () => {
     const userId = await insertUser();
     const organizationId = await insertOrganization();
@@ -360,32 +331,6 @@ describe("identity and tenant security persistence foundation", () => {
        VALUES ($1::uuid, $2, $3::uuid, now() - interval '1 second', now())`,
       [generateUuidV7(), randomBytes(32), userId],
       "ck_sessions__lifecycle",
-    );
-  });
-
-  it("enforces one-time recovery digest and terminal lifecycle", async () => {
-    const userId = await insertUser();
-    const tokenHash = randomBytes(32);
-    const insertRecovery = `INSERT INTO password_recovery_tokens
-      (id, user_id, token_hash, expires_at, created_at)
-      VALUES ($1::uuid, $2::uuid, $3, now() + interval '1 hour', now())`;
-    await sqlClient.query(insertRecovery, [
-      generateUuidV7(),
-      userId,
-      tokenHash,
-    ]);
-
-    await expectConstraintViolation(
-      insertRecovery,
-      [generateUuidV7(), userId, tokenHash],
-      "uq_password_recovery_tokens__token_hash",
-    );
-    await expectConstraintViolation(
-      `INSERT INTO password_recovery_tokens
-        (id, user_id, token_hash, expires_at, used_at, revoked_at, created_at)
-       VALUES ($1::uuid, $2::uuid, $3, now() + interval '1 hour', now(), now(), now())`,
-      [generateUuidV7(), userId, randomBytes(32)],
-      "ck_password_recovery_tokens__lifecycle",
     );
   });
 
@@ -455,36 +400,49 @@ describe("identity and tenant security persistence foundation", () => {
     );
   });
 
-  it("enforces logical identity rate-limit windows without raw PII", async () => {
-    const fingerprint = randomBytes(32);
-    const windowStartedAt = new Date();
-    const insertWindow = `INSERT INTO identity_rate_limit_windows
-      (id, operation, dimension, key_fingerprint, fingerprint_version,
-       window_started_at, expires_at, attempt_count, created_at, updated_at)
-      VALUES ($1::uuid, $2, 'Identity', $3, 1, $4,
-              $4::timestamptz + interval '15 minutes', $5, now(), now())`;
-    await sqlClient.query(insertWindow, [
-      generateUuidV7(),
-      "Login",
-      fingerprint,
-      windowStartedAt,
-      1,
-    ]);
+  it("links each external subject to one User and each User to one subject per provider", async () => {
+    const firstUser = await insertUser();
+    const secondUser = await insertUser();
+    const subject = `auth0|${generateUuidV7()}`;
+    const insert = `INSERT INTO user_external_identities
+        (id, user_id, provider, subject, created_at)
+       VALUES ($1::uuid, $2::uuid, $3, $4, now())`;
 
+    await sqlClient.query(insert, [
+      generateUuidV7(),
+      firstUser,
+      "auth0",
+      subject,
+    ]);
     await expectConstraintViolation(
-      insertWindow,
-      [generateUuidV7(), "Login", fingerprint, windowStartedAt, 2],
-      "uq_identity_rate_limit_windows__logical_window",
+      insert,
+      [generateUuidV7(), secondUser, "auth0", subject],
+      "uq_user_external_identities__provider_subject",
     );
     await expectConstraintViolation(
-      insertWindow,
-      [generateUuidV7(), "PasswordRecovery", randomBytes(32), new Date(), -1],
-      "ck_identity_rate_limit_windows__attempt_count",
+      insert,
+      [generateUuidV7(), firstUser, "auth0", `auth0|${generateUuidV7()}`],
+      "uq_user_external_identities__user_id_provider",
     );
     await expectConstraintViolation(
-      insertWindow,
-      [generateUuidV7(), "Signup", randomBytes(32), new Date(), 1],
-      "ck_identity_rate_limit_windows__operation",
+      insert,
+      [generateUuidV7(), secondUser, "google", `google|${generateUuidV7()}`],
+      "ck_user_external_identities__provider",
+    );
+    await expectConstraintViolation(
+      insert,
+      [generateUuidV7(), secondUser, "auth0", ""],
+      "ck_user_external_identities__subject_length",
+    );
+    await expectConstraintViolation(
+      insert,
+      [
+        generateUuidV7(),
+        generateUuidV7(),
+        "auth0",
+        `auth0|${generateUuidV7()}`,
+      ],
+      "fk_user_external_identities__user_id__users",
     );
   });
 });

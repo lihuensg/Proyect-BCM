@@ -131,6 +131,14 @@ function migrationEnvironment(
     TRUSTED_ORIGINS: "https://app.bcm.test",
     CSRF_HMAC_KEY: randomBytes(32).toString("base64url"),
     RATE_LIMIT_HMAC_KEY: randomBytes(32).toString("base64url"),
+    // Synthetic Auth0 client; HTTP tests that log in run their own provider.
+    AUTH0_ISSUER_URL: "https://bcm-test.auth0.invalid/",
+    AUTH0_CLIENT_ID: "bcm-test-client",
+    AUTH0_CLIENT_SECRET: randomBytes(32).toString("base64url"),
+    AUTH0_CALLBACK_URL: "https://api.bcm.test/api/auth/auth0/callback",
+    WEB_APP_ORIGIN: "https://app.bcm.test",
+    AUTH0_MANAGEMENT_CLIENT_ID: "bcm-test-management-client",
+    AUTH0_MANAGEMENT_CLIENT_SECRET: randomBytes(32).toString("base64url"),
   };
 }
 

@@ -3,10 +3,16 @@ import { createContext, useContext } from "react";
 
 import { publicConfig } from "../config/public-config";
 import { AuthApi } from "../features/auth/api/auth-api";
+import { MembershipsApi } from "../features/memberships/api/memberships-api";
+import { SetupApi } from "../features/setup/api/setup-api";
 import { ApiClient } from "../lib/http/api-client";
 
 export type AppServices = Readonly<{
   authApi: AuthApi;
+  membershipsApi: MembershipsApi;
+  setupApi: SetupApi;
+  /** Full-page navigation outside the SPA, such as the Auth0 logout. */
+  navigateAway(url: string): void;
   queryClient: QueryClient;
   sessionCoordinator: Readonly<{
     markAuthenticated(): Promise<void>;
@@ -20,6 +26,7 @@ export function createAppServices(
   options: Readonly<{
     apiBaseUrl?: string;
     fetchImplementation?: typeof fetch;
+    navigateAway?: (url: string) => void;
   }> = {},
 ): AppServices {
   const queryClient = new QueryClient();
@@ -64,6 +71,10 @@ export function createAppServices(
 
   return Object.freeze({
     authApi: new AuthApi(apiClient),
+    membershipsApi: new MembershipsApi(apiClient),
+    setupApi: new SetupApi(apiClient),
+    navigateAway:
+      options.navigateAway ?? ((url: string) => window.location.assign(url)),
     queryClient,
     sessionCoordinator: Object.freeze({
       async markAuthenticated() {

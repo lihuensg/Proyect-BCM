@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite",
+    "dev": "vite --port 5173 --strictPort",
     "test": "vitest run",
     "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project tsconfig.node.json --noEmit"
   },

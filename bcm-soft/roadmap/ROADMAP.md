@@ -213,7 +213,7 @@ If any field is unknown, the task is not Ready; do not fill it with an invented 
 |---|---|---|---|
 | 1. Repository & Tooling Bootstrap | Minimal pnpm monorepo, Web/API shells, checks, tests, env foundation, basic CI | Detailed | RG-01 |
 | 2. Database Foundation | PostgreSQL/Prisma workflow, conventions, Identity/Tenant base schema, DB roles feasibility | Detailed | RG-02 |
-| 3. Security & Identity | Passwords, sessions, cookies, CSRF, login/logout, identity UI and tests | Detailed | RG-03 |
+| 3. Security & Identity | Auth0 login, sessions, cookies, CSRF, logout, initial setup, identity UI and tests | Detailed | RG-03 |
 | 4. Organizations, Memberships & RBAC | Current Organization, permission map, RLS context, switching, isolation proof | Detailed | RG-04 Critical |
 | 5. Design System & Catalog Pattern | UI tokens/primitives plus one catalog vertical slice | Detailed/medium | RG-05 |
 | 6. Equipment Inventory | Persistence, create/read, controlled update/archive, private photos | Medium | RG-06 |
@@ -387,6 +387,7 @@ The first 25 tasks are planned in greater detail. Scope is refined at task start
 | BCM-TEN-002A | Completed | Critical | TEN-001 | Durable RBAC V1 role/permission, Owner-invariant and stale-session decisions; resolves TEN002-B001/B002 without runtime implementation |
 | BCM-TEN-002 | Completed | Critical | TEN-001, TEN-002A | Central role-to-permission map, authorization version, semantic guards, deny-default tests; TEN-002E end-to-end security review passed |
 | BCM-TEN-003 | Pending | Critical | TEN-001, TEN-002 | First tenant-owned probe resource with application scope + transaction-local RLS + pool leakage tests |
+| BCM-SEC-005 | Review | Critical | TEN-002 | Auth0 login (OIDC code + PKCE server-side, ADR-008), `user_external_identities`, member provisioning via Auth0 Management API, one-time initial setup wizard, `audit_records` with forced RLS, Web login, setup and members pages |
 | BCM-TEN-004 | Pending | Critical | TEN-003, WEB-002 | Organization switch, Membership revalidation, query-key scoping and complete cache clearing; RG-04 |
 | BCM-DS-001 | Pending | Medium | WEB-001 | Complete `DESIGN_SYSTEM.md` foundation: tokens, typography, spacing, core form/table/feedback/responsive patterns |
 | BCM-DEC-CAT-001 | Pending | High | RG-04 | Resolve catalog historical lifecycle and required manual-intake data before persistence; no code |
@@ -404,6 +405,7 @@ RG03-F005 (versioned durable browser validation evidence) is **Resolved** by `do
 BCM-TEN-001 closes session-derived tenant authority, active Membership revalidation, and tenant-bound persistence scope. It does not complete semantic RBAC/authorization-version enforcement (BCM-TEN-002), product-table RLS (BCM-TEN-003), Organization switching (BCM-TEN-004), or RG-04.
 BCM-TEN-002A records the approved V1 role/permission matrix, Owner invariants and fail-closed authorization-version renewal policy. TEN002-B001 and TEN002-B002 are **Resolved** as decisions. BCM-TEN-002 is **Completed** after its technical implementation and TEN-002E Critical end-to-end security review.
 BCM-TEN-002D2 delivered explicit password Session replacement. TEN-002E passed its closure review with no Blocker or High finding; it hardened renewal's exact own-property body boundary. This does not start TEN-003 or TEN-004.
+BCM-SEC-005 introduces the first tenant-owned table (`audit_records`) and transaction-local RLS context in `runAuthorized`, which BCM-TEN-003 adopts. It requires Security, Database, and Architecture review before Completed.
 RG-04 follows BCM-TEN-004 and is the hard boundary before business data.
 RG-05 follows BCM-CAT-001 and may require a bounded refactor before pattern replication.
 
@@ -445,15 +447,16 @@ Schema additions generally receive their own task or a clearly bounded vertical-
 
 Milestones:
 
-1. Argon2id password hashing and credential validation.
+1. Auth0 login through OIDC Authorization Code + PKCE run by the API (ADR-008).
 2. Opaque server-side sessions stored only by token hash.
 3. Secure host-only HttpOnly SameSite=Lax cookies and revocation.
-4. Login, logout, session bootstrap, disabled-account behavior, and safe errors.
+4. Logout, session bootstrap, disabled-account behavior, and safe errors.
 5. CSRF token plus Origin/Referer defense.
-6. Local identity rate-limit adapter plus persistent abuse/recovery state where specified.
-7. Real Web login and session experience with separate 401/403 behavior.
-8. Integration/security tests for invalid credentials, expiry, revocation, CSRF, and rate limit.
-9. RG-03 Identity.
+6. Local per-IP rate-limit adapter for identity endpoints.
+7. One-time initial setup and administrative user provisioning through Auth0.
+8. Real Web login, setup, and session experience with separate 401/403 behavior.
+9. Integration/security tests against a fake OIDC provider for denial, expiry, revocation, CSRF, and rate limit.
+10. RG-03 Identity.
 
 MFA, separate general email verification, Platform Super Admin, SSO, and distributed rate-limit infrastructure are not part of this phase unless their documented trigger fires.
 
@@ -928,7 +931,7 @@ No unresolved decision may be replaced by a task-level default.
 
 | Capability | V1 position | Revisit trigger |
 |---|---|---|
-| MFA | Deferred; password/session controls remain mandatory | First production security review, incident, client requirement, or Owner/Admin risk warrants WebAuthn/TOTP |
+| MFA | Deferred; enabled in Auth0 when triggered; session controls remain mandatory | First production security review, incident, client requirement, or Owner/Admin risk warrants WebAuthn/TOTP |
 | Separate general email verification | Deferred; invitation acceptance verifies managed provisioning | Self-signup or sensitive email-dependent flow |
 | Platform Admin | No universal super-admin | Operational multi-tenant support need; requires separate granular JIT/time-bound audited capability |
 | Distributed rate limiting | Local adapter plus persistent identity state initially | More than one API replica or sustained abuse requires shared/provider-backed implementation review |

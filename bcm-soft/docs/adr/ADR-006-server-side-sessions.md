@@ -1,7 +1,7 @@
 # ADR-006 — Server-Side Sessions
 
 **Date:** 2026-08-08  
-**Status:** Accepted
+**Status:** Superseded by [ADR-008](ADR-008-auth0-identity-provider.md)
 
 ## Context
 

@@ -166,7 +166,7 @@ Registrar/medir duplicate Sale prevented, Reservation conflict, lock timeout/dea
 
 ## 34. Authentication metrics
 
-Contar login success/failure, session expired/revoked, rate limits y recovery request/result genérico por environment/route/outcome. No etiquetar email, account, IP o session. Logs individuales limitados pueden usar fingerprint seguro bajo retención y acceso restringidos.
+Contar login success/denial por motivo, session expired/revoked, rate limits y altas de Users por environment/route/outcome. No etiquetar email, account, IP o session. Logs individuales limitados pueden usar fingerprint seguro bajo retención y acceso restringidos.
 
 ## 35. Authorization metrics
 

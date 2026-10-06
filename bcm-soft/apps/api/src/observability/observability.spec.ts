@@ -63,6 +63,19 @@ describe("API observability foundation", () => {
     },
   });
   const config: ServerConfig = Object.freeze({
+    setupToken: null,
+    auth0: Object.freeze({
+      issuerUrl: "https://bcm-test.auth0.invalid/",
+      clientId: "bcm-test-client",
+      clientSecret: "synthetic-client-secret-for-observability-tests",
+      callbackUrl: "http://localhost:3000/api/auth/auth0/callback",
+      webAppOrigin: "http://localhost:5173",
+      management: Object.freeze({
+        clientId: "bcm-test-management-client",
+        clientSecret: "synthetic-management-secret-for-observability-tests",
+        connection: "Username-Password-Authentication",
+      }),
+    }),
     database: Object.freeze({
       runtimeUrl:
         "postgresql://test-user:test-password@127.0.0.1:5432/bcm_soft_test",
@@ -85,22 +98,10 @@ describe("API observability foundation", () => {
       trustedOrigins: Object.freeze(["https://app.bcm.test"]),
       csrfHmacKey: Buffer.alloc(32, 1),
       rateLimitHmacKey: Buffer.alloc(32, 2),
-      loginRateLimits: Object.freeze({
-        network: Object.freeze({
-          maximumAttempts: 30,
-          windowMilliseconds: 600_000,
-          blockMilliseconds: 600_000,
-        }),
-        identity: Object.freeze({
-          maximumAttempts: 10,
-          windowMilliseconds: 900_000,
-          blockMilliseconds: 900_000,
-        }),
-        identityNetwork: Object.freeze({
-          maximumAttempts: 5,
-          windowMilliseconds: 600_000,
-          blockMilliseconds: 600_000,
-        }),
+      networkRateLimit: Object.freeze({
+        maximumAttempts: 30,
+        windowMilliseconds: 600_000,
+        blockMilliseconds: 600_000,
       }),
     }),
   });

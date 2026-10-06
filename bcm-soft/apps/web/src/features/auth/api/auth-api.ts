@@ -8,14 +8,14 @@ import {
 export class AuthApi {
   constructor(private readonly client: ApiClient) {}
 
-  async login(
-    input: Readonly<{ email: string; password: string }>,
-  ): Promise<void> {
-    await this.client.requestNoContent("/auth/login", {
-      method: "POST",
-      classification: "public",
-      body: input,
-    });
+  /** Starts the Auth0 login; the API redirects back to the Web app. */
+  loginUrl(): string {
+    return this.client.url("/auth/auth0/start");
+  }
+
+  /** Ends the Auth0 single sign-on session after BCM logout. */
+  providerLogoutUrl(): string {
+    return this.client.url("/auth/auth0/logout");
   }
 
   async getSession(): Promise<SessionResult> {

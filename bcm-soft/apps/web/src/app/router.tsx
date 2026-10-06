@@ -5,6 +5,8 @@ import { AppShell } from "./app-shell";
 import { FoundationPage } from "./foundation-page";
 import { AuthenticatedRoute } from "../features/auth/components/session-state";
 import { LoginPage } from "../features/auth/login-page";
+import { MembersPage } from "../features/memberships/members-page";
+import { SetupPage } from "../features/setup/setup-page";
 
 export const appRoutes: RouteObject[] = [
   {
@@ -13,6 +15,10 @@ export const appRoutes: RouteObject[] = [
       {
         path: "/login",
         Component: LoginPage,
+      },
+      {
+        path: "/setup",
+        Component: SetupPage,
       },
       {
         Component: AuthenticatedRoute,
@@ -24,6 +30,10 @@ export const appRoutes: RouteObject[] = [
               {
                 index: true,
                 Component: FoundationPage,
+              },
+              {
+                path: "usuarios",
+                Component: MembersPage,
               },
             ],
           },
